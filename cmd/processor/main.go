@@ -2,51 +2,31 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log"
-	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
-	"github.com/DanMke/event-processing-platform/internal/domain"
+	"github.com/DanMke/event-processing-platform/internal/config"
 	"github.com/DanMke/event-processing-platform/internal/messaging/kafka"
+	"github.com/DanMke/event-processing-platform/internal/processor"
 )
 
 func main() {
-	brokers := strings.Split(getEnv("KAFKA_BROKERS", "localhost:9092"), ",")
-	topic := getEnv("KAFKA_TOPIC", "raw-events")
-	groupID := getEnv("KAFKA_GROUP_ID", "event-processor")
+	cfg := config.LoadProcessor()
 
-	consumer := kafka.NewConsumer(brokers, topic, groupID)
+	consumer := kafka.NewConsumer(cfg.Brokers, cfg.Topic, cfg.GroupID)
 	defer consumer.Close()
+
+	handler := processor.NewHandler()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Printf("processor started — topic=%s group=%s", topic, groupID)
+	log.Printf("processor started brokers=%v topic=%s group=%s", cfg.Brokers, cfg.Topic, cfg.GroupID)
 
-	if err := consumer.Run(ctx, handle); err != nil {
-		log.Fatalf("consumer error: %v", err)
+	if err := consumer.Run(ctx, handler.Handle); err != nil {
+		log.Fatalf("consumer exited with error: %v", err)
 	}
 
-	log.Println("processor stopped")
-}
-
-func handle(_ context.Context, key, value []byte) error {
-	var event domain.Event
-	if err := json.Unmarshal(value, &event); err != nil {
-		return fmt.Errorf("unmarshal: %w", err)
-	}
-	out, _ := json.MarshalIndent(event, "", "  ")
-	log.Printf("received event [key=%s]:\n%s\n", key, out)
-	return nil
-}
-
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
+	log.Println("processor stopped gracefully")
 }

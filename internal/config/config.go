@@ -1,0 +1,43 @@
+package config
+
+import (
+	"os"
+	"strings"
+)
+
+type Processor struct {
+	Brokers []string
+	Topic   string
+	GroupID string
+}
+
+type Producer struct {
+	Brokers []string
+	Topic   string
+}
+
+func LoadProcessor() Processor {
+	return Processor{
+		Brokers: splitBrokers(getEnv("KAFKA_BROKERS", "localhost:9092")),
+		Topic:   getEnv("KAFKA_TOPIC", "raw-events"),
+		GroupID: getEnv("KAFKA_GROUP_ID", "event-processor"),
+	}
+}
+
+func LoadProducer() Producer {
+	return Producer{
+		Brokers: splitBrokers(getEnv("KAFKA_BROKERS", "localhost:9092")),
+		Topic:   getEnv("KAFKA_TOPIC", "raw-events"),
+	}
+}
+
+func splitBrokers(v string) []string {
+	return strings.Split(v, ",")
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
