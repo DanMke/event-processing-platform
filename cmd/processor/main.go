@@ -6,23 +6,34 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/DanMke/event-processing-platform/internal/config"
 	"github.com/DanMke/event-processing-platform/internal/messaging/kafka"
 	"github.com/DanMke/event-processing-platform/internal/processor"
+	pg "github.com/DanMke/event-processing-platform/internal/repository/postgres"
 )
 
 func main() {
-	cfg := config.LoadProcessor()
+	kafkaCfg := config.LoadProcessor()
+	pgCfg := config.LoadPostgres()
 
-	consumer := kafka.NewConsumer(cfg.Brokers, cfg.Topic, cfg.GroupID)
+	pool, err := pgxpool.New(context.Background(), pgCfg.DSN)
+	if err != nil {
+		log.Fatalf("connect postgres: %v", err)
+	}
+	defer pool.Close()
+
+	repo := pg.NewEventRepository(pool)
+	handler := processor.NewHandler(repo)
+
+	consumer := kafka.NewConsumer(kafkaCfg.Brokers, kafkaCfg.Topic, kafkaCfg.GroupID)
 	defer consumer.Close()
-
-	handler := processor.NewHandler()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Printf("processor started brokers=%v topic=%s group=%s", cfg.Brokers, cfg.Topic, cfg.GroupID)
+	log.Printf("processor started brokers=%v topic=%s group=%s", kafkaCfg.Brokers, kafkaCfg.Topic, kafkaCfg.GroupID)
 
 	if err := consumer.Run(ctx, handler.Handle); err != nil {
 		log.Fatalf("consumer exited with error: %v", err)

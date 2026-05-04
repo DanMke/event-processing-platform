@@ -16,6 +16,10 @@ type Producer struct {
 	Topic   string
 }
 
+type Postgres struct {
+	DSN string
+}
+
 func LoadProcessor() Processor {
 	return Processor{
 		Brokers: splitBrokers(getEnv("KAFKA_BROKERS", "localhost:9092")),
@@ -28,6 +32,12 @@ func LoadProducer() Producer {
 	return Producer{
 		Brokers: splitBrokers(getEnv("KAFKA_BROKERS", "localhost:9092")),
 		Topic:   getEnv("KAFKA_TOPIC", "raw-events"),
+	}
+}
+
+func LoadPostgres() Postgres {
+	return Postgres{
+		DSN: getEnv("POSTGRES_DSN", "postgres://events:events@localhost:5432/events?sslmode=disable"),
 	}
 }
 

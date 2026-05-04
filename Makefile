@@ -1,13 +1,13 @@
 GO     := go
 DOCKER := docker compose -f infra/docker-compose.yml
 
-.PHONY: up down create-topic producer processor logs tidy build
+.PHONY: up down create-topic migrate producer processor logs build tidy
 
-## up: start Kafka in the background
+## up: start Kafka, Kafka UI and Postgres in the background
 up:
 	$(DOCKER) up -d
 
-## down: stop Kafka and remove volumes
+## down: stop all containers and remove volumes
 down:
 	$(DOCKER) down -v
 
@@ -15,15 +15,20 @@ down:
 create-topic:
 	bash scripts/create-topics.sh
 
-## producer: publish a sample event to raw-events
+## migrate: apply SQL migrations against the running Postgres container
+migrate:
+	docker exec -i postgres psql -U events -d events \
+		< internal/repository/postgres/migrations/001_create_events_table.sql
+
+## producer: publish sample events to raw-events
 producer:
 	$(GO) run ./cmd/producer
 
-## processor: start the consumer (Ctrl+C to stop)
+## processor: start the consumer/processor (Ctrl+C to stop)
 processor:
 	$(GO) run ./cmd/processor
 
-## logs: follow Kafka container logs
+## logs: follow all container logs
 logs:
 	$(DOCKER) logs -f
 
