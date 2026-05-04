@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/DanMke/event-processing-platform/internal/config"
+	"github.com/DanMke/event-processing-platform/internal/dlq"
 	"github.com/DanMke/event-processing-platform/internal/messaging/kafka"
 	"github.com/DanMke/event-processing-platform/internal/processor"
 	pg "github.com/DanMke/event-processing-platform/internal/repository/postgres"
@@ -18,6 +19,7 @@ import (
 func main() {
 	kafkaCfg := config.LoadProcessor()
 	pgCfg := config.LoadPostgres()
+	dlqCfg := config.LoadDLQ()
 
 	pool, err := pgxpool.New(context.Background(), pgCfg.DSN)
 	if err != nil {
@@ -30,8 +32,13 @@ func main() {
 		log.Fatalf("init schema validator: %v", err)
 	}
 
+	dlqProducer := kafka.NewProducer(dlqCfg.Brokers, dlqCfg.Topic)
+	defer dlqProducer.Close()
+
+	dlqPublisher := dlq.NewPublisher(dlqProducer, kafkaCfg.Topic)
+
 	repo := pg.NewEventRepository(pool)
-	handler := processor.NewHandler(repo, validator)
+	handler := processor.NewHandler(repo, validator, dlqPublisher)
 
 	consumer := kafka.NewConsumer(kafkaCfg.Brokers, kafkaCfg.Topic, kafkaCfg.GroupID)
 	defer consumer.Close()
@@ -39,7 +46,8 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Printf("processor started brokers=%v topic=%s group=%s", kafkaCfg.Brokers, kafkaCfg.Topic, kafkaCfg.GroupID)
+	log.Printf("processor started brokers=%v topic=%s group=%s dlq_topic=%s",
+		kafkaCfg.Brokers, kafkaCfg.Topic, kafkaCfg.GroupID, dlqCfg.Topic)
 
 	if err := consumer.Run(ctx, handler.Handle); err != nil {
 		log.Fatalf("consumer exited with error: %v", err)

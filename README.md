@@ -4,6 +4,8 @@ Plataforma de processamento de eventos usando Go, Kafka e Postgres.
 
 ```
 Producer → Kafka (raw-events) → Processor → Postgres (events)
+                                     ↓
+                              Kafka (failed-events)  ← eventos inválidos
 ```
 
 ## Pré-requisitos
@@ -21,12 +23,14 @@ make up
 
 Sobe Kafka, Kafka UI e Postgres. Aguarda os containers ficarem saudáveis (≈20 s na primeira vez).
 
-### 2. Criar o tópico e aplicar a migration
+### 2. Criar os tópicos e aplicar a migration
 
 ```bash
 make create-topic
 make migrate
 ```
+
+Cria os tópicos `raw-events` e `failed-events`.
 
 ### 3. Iniciar o processor
 
@@ -44,14 +48,22 @@ Em outro terminal:
 make producer
 ```
 
-O producer publica dois eventos (`contract.created` e `contract.cancelled`) e encerra.  
-O processor consome, loga os metadados e persiste no Postgres.
+O producer publica dois eventos (`contract.created` e `contract.cancelled`) e encerra.
+O processor consome, valida, persiste no Postgres e encaminha eventos inválidos para a DLQ.
 
 ### 5. Consultar os eventos persistidos
 
 ```bash
-docker exec -it postgres psql -U events -d events -c "SELECT event_id, tenant_id, event_type, occurred_at FROM events;"
+docker exec -it postgres psql -U events -d events -c \
+  "SELECT event_id, tenant_id, event_type, occurred_at FROM events;"
 ```
+
+### 6. Visualizar tópicos no Kafka UI
+
+Acesse [http://localhost:8080](http://localhost:8080) e selecione o cluster `local`.
+
+- **raw-events** -> eventos publicados pelo producer
+- **failed-events** -> eventos rejeitados (envelope inválido, schema inválido, JSON malformado)
 
 ### Resumo: make up && make create-topic && make migrate → make processor → make producer
 
@@ -59,12 +71,13 @@ docker exec -it postgres psql -U events -d events -c "SELECT event_id, tenant_id
 
 ## Variáveis de ambiente
 
-| Variável         | Padrão                                                      | Descrição                        |
-|------------------|-------------------------------------------------------------|----------------------------------|
-| `KAFKA_BROKERS`  | `localhost:9092`                                            | Endereço do broker Kafka         |
-| `KAFKA_TOPIC`    | `raw-events`                                                | Tópico de eventos                |
-| `KAFKA_GROUP_ID` | `event-processor`                                           | Consumer group (processor only)  |
-| `POSTGRES_DSN`   | `postgres://events:events@localhost:5432/events?sslmode=disable` | Connection string do Postgres |
+| Variável          | Padrão                                                           | Descrição                        |
+|-------------------|------------------------------------------------------------------|----------------------------------|
+| `KAFKA_BROKERS`   | `localhost:9092`                                                 | Endereço do broker Kafka         |
+| `KAFKA_TOPIC`     | `raw-events`                                                     | Tópico de eventos                |
+| `KAFKA_GROUP_ID`  | `event-processor`                                                | Consumer group (processor only)  |
+| `KAFKA_DLQ_TOPIC` | `failed-events`                                                  | Tópico de dead letter            |
+| `POSTGRES_DSN`    | `postgres://events:events@localhost:5432/events?sslmode=disable` | Connection string do Postgres    |
 
 ---
 
@@ -73,24 +86,75 @@ docker exec -it postgres psql -U events -d events -c "SELECT event_id, tenant_id
 ```
 event-processing-platform/
 ├── cmd/
-│   ├── producer/           # Publica eventos no Kafka
-│   └── processor/          # Consome do Kafka e persiste no Postgres
+│   ├── producer/              # Publica eventos no Kafka
+│   └── processor/             # Consome do Kafka, valida e persiste
 ├── internal/
-│   ├── config/             # Leitura de variáveis de ambiente
-│   ├── domain/             # Struct Event (envelope padrão)
-│   ├── messaging/kafka/    # Abstrações de producer e consumer
-│   ├── processor/          # Handler: unmarshal → log → persist
-│   ├── producer/           # Service: build → publish
-│   └── repository/postgres/
-│       ├── migrations/     # SQL migrations
-│       └── repository.go   # EventRepository
+│   ├── config/                # Leitura de variáveis de ambiente
+│   ├── dlq/                   # Dead-letter queue publisher
+│   ├── domain/                # Struct Event e erros de domínio
+│   ├── messaging/kafka/       # Abstrações de producer e consumer
+│   ├── processor/             # Handler: unmarshal → validate → retry → persist
+│   ├── producer/              # Service: build → publish
+│   ├── repository/postgres/
+│   │   ├── migrations/        # SQL migrations
+│   │   └── repository.go      # EventRepository
+│   ├── retry/                 # Retry com backoff incremental
+│   └── validation/
+│       ├── schemas/           # JSON Schemas por event_type e schema_version
+│       ├── envelope.go        # Validação dos campos obrigatórios do envelope
+│       └── schema.go          # Validação do payload por JSON Schema
 ├── infra/
-│   └── docker-compose.yml  # Kafka, Kafka UI, Postgres
+│   └── docker-compose.yml     # Kafka, Kafka UI, Postgres
 ├── scripts/
-│   └── create-topics.sh
+│   └── create-topics.sh       # Cria raw-events e failed-events
 ├── Makefile
 └── go.mod
 ```
+
+---
+
+## Pipeline do processor
+
+```
+Kafka (raw-events)
+  │
+  ▼
+unmarshal JSON
+  ├─ erro → DLQ (failed-events) + offset confirmado
+  ▼
+validar envelope (campos obrigatórios)
+  ├─ inválido → DLQ (failed-events) + offset confirmado
+  ▼
+validar payload por JSON Schema
+  ├─ inválido ou schema desconhecido → DLQ (failed-events) + offset confirmado
+  ▼
+persistir no Postgres (com retry: 100ms → 300ms → 500ms)
+  ├─ duplicata → ignorado como sucesso (idempotência)
+  ├─ erro transitório esgotado → offset NÃO confirmado
+  ▼
+evento persistido
+```
+
+---
+
+## Comportamentos-chave
+
+### Idempotência
+A tabela `events` usa `PRIMARY KEY (tenant_id, event_id)`. O repository detecta `ON CONFLICT DO NOTHING` via `RowsAffected() == 0` e retorna `domain.ErrDuplicateEvent`. O handler trata como sucesso controlado -> o evento não é salvo novamente nem enviado à DLQ.
+
+### Validação de envelope
+Campos obrigatórios verificados antes de qualquer persistência: `event_id`, `tenant_id`, `event_type`, `schema_version`, `producer`, `occurred_at`, `payload`. Evento com campos ausentes vai para a DLQ.
+
+### Validação de payload por schema
+O schema é selecionado por `event_type + schema_version` (ex: `contract.created/1.0`). Os schemas ficam em `internal/validation/schemas/` e são carregados via `embed.FS` -> nenhum I/O em runtime. Payload inválido ou tipo desconhecido vai para a DLQ.
+
+### Dead-letter queue (DLQ)
+Erros permanentes (unmarshal, envelope, schema) publicam no tópico `failed-events` com o evento original + motivo + timestamp. O offset é confirmado. Erros transitórios (banco de dados) não vão para a DLQ -> o offset fica pendente para reprocessamento.
+
+### Retry
+Falhas de persistência disparam até 3 retries com backoff incremental (100ms, 300ms, 500ms). Se o banco permanecer indisponível, o offset não é confirmado, garantindo que o evento seja reprocessado quando o banco voltar.
+
+---
 
 ## Formato do evento
 
@@ -111,10 +175,21 @@ event-processing-platform/
 }
 ```
 
+## Formato da mensagem na DLQ
+
+```json
+{
+  "original_event": { "...evento original..." },
+  "error_reason": "invalid envelope: missing=tenant_id,occurred_at",
+  "failed_at": "2026-05-03T20:00:00Z",
+  "source_topic": "raw-events"
+}
+```
+
+---
+
 ## Próximos passos planejados
 
 - Observabilidade com OpenTelemetry
-- Dead-letter queue (DLQ) e retry
 - Infraestrutura como código (Terraform / LocalStack)
-- Teste de Carga
-- Detalhar documentação
+- Teste de carga

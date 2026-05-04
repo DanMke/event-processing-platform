@@ -41,6 +41,18 @@ func LoadPostgres() Postgres {
 	}
 }
 
+type DLQ struct {
+	Brokers []string
+	Topic   string
+}
+
+func LoadDLQ() DLQ {
+	return DLQ{
+		Brokers: splitBrokers(getEnv("KAFKA_BROKERS", "localhost:9092")),
+		Topic:   getEnv("KAFKA_DLQ_TOPIC", "failed-events"),
+	}
+}
+
 func splitBrokers(v string) []string {
 	return strings.Split(v, ",")
 }
