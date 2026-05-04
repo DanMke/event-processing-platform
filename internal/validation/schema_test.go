@@ -74,6 +74,29 @@ func TestValidatePayload(t *testing.T) {
 			t.Error("expected error for invalid JSON, got nil")
 		}
 	})
+
+	t.Run("contract.created rejects additional properties", func(t *testing.T) {
+		event := newEvent("contract.created", "1.0", map[string]any{
+			"contract_id": "c-123",
+			"amount":      1000,
+			"currency":    "BRL",
+			"unexpected":  "field",
+		})
+		if err := v.ValidatePayload(event); err == nil {
+			t.Error("expected validation error for additional property, got nil")
+		}
+	})
+
+	t.Run("contract.cancelled rejects additional properties", func(t *testing.T) {
+		event := newEvent("contract.cancelled", "1.0", map[string]any{
+			"contract_id": "c-123",
+			"reason":      "customer_request",
+			"unexpected":  "field",
+		})
+		if err := v.ValidatePayload(event); err == nil {
+			t.Error("expected validation error for additional property, got nil")
+		}
+	})
 }
 
 func newEvent(eventType, schemaVersion string, payload any) domain.Event {

@@ -6,5 +6,6 @@
     "contract_id": { "type": "string" },
     "amount":      { "type": "number" },
     "currency":    { "type": "string" }
-  }
+  },
+  "additionalProperties": false
 }

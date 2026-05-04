@@ -53,7 +53,7 @@ O processor consome, loga os metadados e persiste no Postgres.
 docker exec -it postgres psql -U events -d events -c "SELECT event_id, tenant_id, event_type, occurred_at FROM events;"
 ```
 
-### Resumo: make up → make create-topic → make migrate → make processor → make producer
+### Resumo: make up && make create-topic && make migrate → make processor → make producer
 
 ---
 
@@ -113,8 +113,6 @@ event-processing-platform/
 
 ## Próximos passos planejados
 
-- Idempotência por `(tenant_id, event_id)`
-- Validação por JSON Schema
 - Observabilidade com OpenTelemetry
 - Dead-letter queue (DLQ) e retry
 - Infraestrutura como código (Terraform / LocalStack)
