@@ -12,6 +12,7 @@ import (
 	"github.com/DanMke/event-processing-platform/internal/messaging/kafka"
 	"github.com/DanMke/event-processing-platform/internal/processor"
 	pg "github.com/DanMke/event-processing-platform/internal/repository/postgres"
+	"github.com/DanMke/event-processing-platform/internal/validation"
 )
 
 func main() {
@@ -24,8 +25,13 @@ func main() {
 	}
 	defer pool.Close()
 
+	validator, err := validation.NewSchemaValidator()
+	if err != nil {
+		log.Fatalf("init schema validator: %v", err)
+	}
+
 	repo := pg.NewEventRepository(pool)
-	handler := processor.NewHandler(repo)
+	handler := processor.NewHandler(repo, validator)
 
 	consumer := kafka.NewConsumer(kafkaCfg.Brokers, kafkaCfg.Topic, kafkaCfg.GroupID)
 	defer consumer.Close()

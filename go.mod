@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	github.com/jackc/pgx/v5 v5.9.2
+	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/segmentio/kafka-go v0.4.47
 )
 

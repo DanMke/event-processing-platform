@@ -18,9 +18,8 @@ func NewEventRepository(pool *pgxpool.Pool) *EventRepository {
 	return &EventRepository{pool: pool}
 }
 
-// TODO: Review rule to conflict
 func (r *EventRepository) Save(ctx context.Context, event domain.Event) error {
-	_, err := r.pool.Exec(ctx, `
+	result, err := r.pool.Exec(ctx, `
 		INSERT INTO events
 			(event_id, tenant_id, event_type, schema_version, producer, trace_id, payload, occurred_at, processed_at)
 		VALUES
@@ -39,6 +38,9 @@ func (r *EventRepository) Save(ctx context.Context, event domain.Event) error {
 	)
 	if err != nil {
 		return fmt.Errorf("insert event: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return domain.ErrDuplicateEvent
 	}
 	return nil
 }
