@@ -19,7 +19,7 @@ func main() {
 
 	log.Printf("producer started brokers=%v topic=%s", cfg.Brokers, cfg.Topic)
 
-	if err := svc.PublishSample(context.Background()); err != nil {
+	if err := svc.PublishSampleEvents(context.Background()); err != nil {
 		log.Fatalf("publish failed: %v", err)
 	}
 
