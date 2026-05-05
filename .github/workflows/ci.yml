@@ -36,8 +36,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Run tests
-        run: go test -race ./...
+      - name: Run unit tests
+        run: make test
+
+      - name: Run integration tests
+        run: make test-integration
 
       - name: Build binaries
         run: |
