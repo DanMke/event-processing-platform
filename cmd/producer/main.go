@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 
 	"github.com/DanMke/event-processing-platform/internal/config"
 	"github.com/DanMke/event-processing-platform/internal/messaging/kafka"
+	"github.com/DanMke/event-processing-platform/internal/observability"
 	"github.com/DanMke/event-processing-platform/internal/producer"
 )
 
 func main() {
+	observability.Init()
+
 	cfg := config.LoadProducer()
 
 	p := kafka.NewProducer(cfg.Brokers, cfg.Topic)
@@ -17,11 +20,12 @@ func main() {
 
 	svc := producer.NewService(p)
 
-	log.Printf("producer started brokers=%v topic=%s", cfg.Brokers, cfg.Topic)
+	slog.Info("producer started", "brokers", cfg.Brokers, "topic", cfg.Topic)
 
 	if err := svc.PublishSampleEvents(context.Background()); err != nil {
-		log.Fatalf("publish failed: %v", err)
+		slog.Error("publish failed", "error_reason", err.Error())
+		panic(err)
 	}
 
-	log.Println("producer finished")
+	slog.Info("producer finished")
 }

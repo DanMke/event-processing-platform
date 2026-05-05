@@ -50,7 +50,13 @@ func main() {
 	}()
 
 	// --- postgres ---
-	pool, err := pgxpool.New(context.Background(), pgCfg.DSN)
+	poolCfg, err := pgxpool.ParseConfig(pgCfg.DSN)
+	if err != nil {
+		slog.Error("parse postgres dsn failed", "error_reason", err.Error())
+		panic(err)
+	}
+	poolCfg.MaxConns = pgCfg.MaxConns
+	pool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
 	if err != nil {
 		slog.Error("connect postgres failed", "error_reason", err.Error())
 		panic(err)
@@ -74,7 +80,8 @@ func main() {
 	handler := processor.NewHandler(repo, validator, dlqPublisher, processor.WithMetrics(m))
 
 	// --- consumer ---
-	consumer := kafka.NewConsumer(kafkaCfg.Brokers, kafkaCfg.Topic, kafkaCfg.GroupID)
+	consumer := kafka.NewConsumer(kafkaCfg.Brokers, kafkaCfg.Topic, kafkaCfg.GroupID,
+		kafka.WithWorkers(kafkaCfg.Workers))
 	defer consumer.Close()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -84,8 +91,10 @@ func main() {
 		"brokers", kafkaCfg.Brokers,
 		"topic", kafkaCfg.Topic,
 		"group", kafkaCfg.GroupID,
+		"workers", kafkaCfg.Workers,
 		"dlq_topic", dlqCfg.Topic,
 		"metrics_port", obsCfg.MetricsPort,
+		"pg_max_conns", pgCfg.MaxConns,
 	)
 
 	if err := consumer.Run(ctx, handler.Handle); err != nil {

@@ -8,22 +8,18 @@ import (
 	"github.com/DanMke/event-processing-platform/internal/producer"
 )
 
-// --- mock ---
-
 type mockPublisher struct {
 	calls []any
 	err   error
 }
 
-func (m *mockPublisher) Publish(_ context.Context, v any) error {
+func (m *mockPublisher) PublishKeyed(_ context.Context, _ []byte, v any) error {
 	if m.err != nil {
 		return m.err
 	}
 	m.calls = append(m.calls, v)
 	return nil
 }
-
-// --- tests ---
 
 func TestPublishSampleEvents_Success(t *testing.T) {
 	pub := &mockPublisher{}

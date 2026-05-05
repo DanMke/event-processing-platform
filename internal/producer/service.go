@@ -4,14 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/DanMke/event-processing-platform/internal/domain"
 )
 
 type Publisher interface {
-	Publish(ctx context.Context, v any) error
+	PublishKeyed(ctx context.Context, key []byte, v any) error
 }
 
 type Service struct {
@@ -29,11 +29,15 @@ func (s *Service) PublishSampleEvents(ctx context.Context) error {
 	}
 
 	for _, event := range events {
-		if err := s.publisher.Publish(ctx, event); err != nil {
+		if err := s.publisher.PublishKeyed(ctx, []byte(event.TenantID), event); err != nil {
 			return fmt.Errorf("publish %s: %w", event.EventType, err)
 		}
-		log.Printf("event published id=%s type=%s tenant=%s trace=%s",
-			event.EventID, event.EventType, event.TenantID, event.TraceID)
+		slog.Info("event published",
+			"event_id", event.EventID,
+			"event_type", event.EventType,
+			"tenant_id", event.TenantID,
+			"trace_id", event.TraceID,
+		)
 	}
 	return nil
 }

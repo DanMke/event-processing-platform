@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 )
 
@@ -38,6 +38,9 @@ func (p *Publisher) Publish(ctx context.Context, original []byte, reason string)
 	if err := p.sender.Publish(ctx, failed); err != nil {
 		return fmt.Errorf("publish to dlq: %w", err)
 	}
-	log.Printf("event sent to dlq source_topic=%s reason=%q", p.sourceTopic, reason)
+	slog.Info("event sent to DLQ",
+		"source_topic", p.sourceTopic,
+		"error_reason", reason,
+	)
 	return nil
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -9,6 +10,7 @@ type Processor struct {
 	Brokers []string
 	Topic   string
 	GroupID string
+	Workers int
 }
 
 type Producer struct {
@@ -17,7 +19,17 @@ type Producer struct {
 }
 
 type Postgres struct {
-	DSN string
+	DSN      string
+	MaxConns int32
+}
+
+type DLQ struct {
+	Brokers []string
+	Topic   string
+}
+
+type ObservabilityConfig struct {
+	MetricsPort string
 }
 
 func LoadProcessor() Processor {
@@ -25,6 +37,7 @@ func LoadProcessor() Processor {
 		Brokers: splitBrokers(getEnv("KAFKA_BROKERS", "localhost:9092")),
 		Topic:   getEnv("KAFKA_TOPIC", "raw-events"),
 		GroupID: getEnv("KAFKA_GROUP_ID", "event-processor"),
+		Workers: getEnvInt("KAFKA_WORKERS", 1),
 	}
 }
 
@@ -37,13 +50,9 @@ func LoadProducer() Producer {
 
 func LoadPostgres() Postgres {
 	return Postgres{
-		DSN: getEnv("POSTGRES_DSN", "postgres://events:events@localhost:5432/events?sslmode=disable"),
+		DSN:      getEnv("POSTGRES_DSN", "postgres://events:events@localhost:5432/events?sslmode=disable"),
+		MaxConns: int32(getEnvInt("POSTGRES_MAX_CONNS", 10)),
 	}
-}
-
-type DLQ struct {
-	Brokers []string
-	Topic   string
 }
 
 func LoadDLQ() DLQ {
@@ -51,10 +60,6 @@ func LoadDLQ() DLQ {
 		Brokers: splitBrokers(getEnv("KAFKA_BROKERS", "localhost:9092")),
 		Topic:   getEnv("KAFKA_DLQ_TOPIC", "failed-events"),
 	}
-}
-
-type ObservabilityConfig struct {
-	MetricsPort string
 }
 
 func LoadObservability() ObservabilityConfig {
@@ -70,6 +75,15 @@ func splitBrokers(v string) []string {
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
 	}
 	return fallback
 }

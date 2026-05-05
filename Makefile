@@ -1,72 +1,105 @@
-GO     := go
-DOCKER := docker compose -f infra/docker-compose.yml
+GO           := go
+DOCKER       := docker compose -f infra/docker-compose.yml
+DOCKER_LOAD  := docker compose -f infra/docker-compose.yml --profile loadgen
 
-.PHONY: up down create-topic migrate producer processor logs build tidy
+TOTAL_EVENTS    ?= 1000
+TENANTS         ?= 5
+INVALID_RATIO   ?= 0.05
+DUPLICATE_RATIO ?= 0.02
+CONCURRENCY     ?= 4
+SCALE           ?= 3
+KAFKA_WORKERS   ?= 4
+POSTGRES_MAX_CONNS ?= 20
 
-## up: start Kafka, Kafka UI and Postgres in the background
+.PHONY: up down logs create-topic migrate producer processor \
+        load-test load-test-docker scale-processor \
+        test fmt tidy build docker-build metrics ps \
+        demo demo-scale
+
 up:
 	$(DOCKER) up -d
 
-## down: stop all containers and remove volumes
 down:
 	$(DOCKER) down -v
 
-## create-topic: create the raw-events topic inside the running Kafka container
+logs:
+	$(DOCKER) logs -f
+
 create-topic:
 	bash scripts/create-topics.sh
 
-## migrate: apply SQL migrations against the running Postgres container
 migrate:
 	docker exec -i postgres psql -U events -d events \
 		< internal/repository/postgres/migrations/001_create_events_table.sql
 
-## producer: publish sample events to raw-events
 producer:
 	$(GO) run ./cmd/producer
 
-## processor: start the consumer/processor (Ctrl+C to stop)
 processor:
 	$(GO) run ./cmd/processor
 
-## logs: follow all container logs
-logs:
-	$(DOCKER) logs -f
+load-test:
+	TOTAL_EVENTS=$(TOTAL_EVENTS) TENANTS=$(TENANTS) \
+	INVALID_RATIO=$(INVALID_RATIO) DUPLICATE_RATIO=$(DUPLICATE_RATIO) \
+	CONCURRENCY=$(CONCURRENCY) \
+	$(GO) run ./cmd/loadgen
 
-## build: compile both binaries into ./bin/
-build:
-	$(GO) build -o bin/producer ./cmd/producer
-	$(GO) build -o bin/processor ./cmd/processor
+load-test-docker:
+	TOTAL_EVENTS=$(TOTAL_EVENTS) TENANTS=$(TENANTS) \
+	INVALID_RATIO=$(INVALID_RATIO) DUPLICATE_RATIO=$(DUPLICATE_RATIO) \
+	CONCURRENCY=$(CONCURRENCY) \
+	$(DOCKER_LOAD) run --rm loadgen
 
-## tidy: download and tidy dependencies
-tidy:
-	$(GO) mod tidy
+scale-processor:
+	KAFKA_WORKERS=$(KAFKA_WORKERS) POSTGRES_MAX_CONNS=$(POSTGRES_MAX_CONNS) \
+	$(DOCKER) up -d --scale processor=$(SCALE)
+	@echo ""
+	@echo "$(SCALE) instâncias do processor rodando (workers=$(KAFKA_WORKERS), pg_max_conns=$(POSTGRES_MAX_CONNS))."
+	@echo "Kafka UI → http://localhost:8080 → Consumer Groups → event-processor"
 
-## test: run all tests
 test:
 	$(GO) test ./...
 
-## run: start infra, migrate and run processor
-run: up create-topic migrate processor
-
-## restart: restart all services
-restart: down up
-
-## clean: remove build artifacts
-clean:
-	rm -rf bin/
-
-## fmt: format Go code
 fmt:
 	$(GO) fmt ./...
 
-## lint: run linter
-lint:
-	golangci-lint run
+tidy:
+	$(GO) mod tidy
 
-## metrics: curl metrics endpoint
+build:
+	$(GO) build -o bin/processor ./cmd/processor
+	$(GO) build -o bin/producer  ./cmd/producer
+	$(GO) build -o bin/loadgen   ./cmd/loadgen
+
+docker-build:
+	docker build --build-arg BINARY=processor -t event-processor:latest .
+	docker build --build-arg BINARY=loadgen   -t event-loadgen:latest   .
+
 metrics:
-	curl http://localhost:2112/metrics
+	@CONTAINER=$$(docker ps -q --filter "label=com.docker.compose.service=processor" | head -1); \
+	if [ -n "$$CONTAINER" ]; then \
+		docker exec $$CONTAINER wget -qO- http://localhost:2112/metrics; \
+	else \
+		curl -s http://localhost:2112/metrics; \
+	fi
 
-## ps: list running containers
 ps:
 	$(DOCKER) ps
+
+demo:
+	$(DOCKER) up -d kafka postgres kafka-ui prometheus
+	$(MAKE) create-topic
+	$(MAKE) migrate
+	$(DOCKER) up -d processor
+	@echo "Aguardando processor inicializar..."
+	sleep 3
+	$(MAKE) load-test-docker TOTAL_EVENTS=500 TENANTS=5 INVALID_RATIO=0.05 DUPLICATE_RATIO=0.02 CONCURRENCY=4
+
+demo-scale:
+	$(DOCKER) up -d kafka postgres kafka-ui prometheus
+	$(MAKE) create-topic
+	$(MAKE) migrate
+	$(MAKE) scale-processor SCALE=3
+	@echo "Aguardando processors inicializarem..."
+	sleep 5
+	$(MAKE) load-test-docker TOTAL_EVENTS=5000 TENANTS=10 INVALID_RATIO=0.05 DUPLICATE_RATIO=0.02 CONCURRENCY=20
