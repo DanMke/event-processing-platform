@@ -38,17 +38,6 @@ func main() {
 	)
 	m := obsmetrics.New(reg)
 
-	// --- metrics HTTP server ---
-	go func() {
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
-		addr := ":" + obsCfg.MetricsPort
-		slog.Info("metrics server listening", "addr", addr)
-		if err := http.ListenAndServe(addr, mux); err != nil {
-			slog.Error("metrics server stopped", "error_reason", err.Error())
-		}
-	}()
-
 	// --- postgres ---
 	poolCfg, err := pgxpool.ParseConfig(pgCfg.DSN)
 	if err != nil {
@@ -62,6 +51,25 @@ func main() {
 		panic(err)
 	}
 	defer pool.Close()
+
+	// --- HTTP server: metrics + health ---
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+			if err := pool.Ping(r.Context()); err != nil {
+				http.Error(w, `{"status":"unhealthy"}`, http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
+		})
+		addr := ":" + obsCfg.MetricsPort
+		slog.Info("metrics server listening", "addr", addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			slog.Error("metrics server stopped", "error_reason", err.Error())
+		}
+	}()
 
 	// --- schema validator ---
 	validator, err := validation.NewSchemaValidator()
