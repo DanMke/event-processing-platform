@@ -4,7 +4,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Metrics holds all Prometheus instruments for the processor.
 type Metrics struct {
 	EventsProcessedTotal  prometheus.Counter
 	EventsFailedTotal     prometheus.Counter
@@ -14,9 +13,6 @@ type Metrics struct {
 	ProcessingDuration    prometheus.Histogram
 }
 
-// New registers and returns the processor metrics using the provided registerer.
-// Pass prometheus.DefaultRegisterer for production or a fresh prometheus.NewRegistry()
-// for isolated tests.
 func New(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
 		EventsProcessedTotal: prometheus.NewCounter(prometheus.CounterOpts{

@@ -16,12 +16,9 @@ type reader interface {
 	Close() error
 }
 
-// ConsumerOption configures a Consumer.
 type ConsumerOption func(*Consumer)
 
-// WithWorkers sets the number of messages processed concurrently.
-// Defaults to 1 (sequential). Values > 1 enable concurrent processing
-// while preserving at-least-once delivery and offset ordering.
+// WithWorkers sets the number of concurrent message workers (default 1).
 func WithWorkers(n int) ConsumerOption {
 	return func(c *Consumer) {
 		if n > 1 {
@@ -56,22 +53,9 @@ func NewConsumer(brokers []string, topic, groupID string, opts ...ConsumerOption
 	return c
 }
 
-// Run consumes messages from Kafka and dispatches them to handler.
-//
-// Concurrency model (workers > 1):
-//
-//	A fetcher goroutine feeds a chan-of-chans queue (pending) in fetch order.
-//	Each message is processed by a worker goroutine and reports its result
-//	to a dedicated buffered channel.
-//	The committer goroutine reads pending in ORDER, waiting for each message
-//	to finish before deciding whether to commit its offset.
-//
-// This guarantees:
-//   - Offsets are always committed in ascending order.
-//   - A failed message stops further commits; the consumer returns an error
-//     so the supervisor can restart it from the uncommitted offset.
-//   - Permanent errors (invalid events) go to DLQ and return nil, so they
-//     never block the pipeline.
+// Run consumes messages from Kafka using a chan-of-chans pattern: a fetcher
+// goroutine dispatches workers in parallel; a committer drains results in fetch
+// order, guaranteeing ascending offset commits and at-least-once delivery.
 func (c *Consumer) Run(ctx context.Context, handler MessageHandler) error {
 	slog.Info("consumer loop started", "topic", c.topic, "group", c.group, "workers", c.workers)
 	defer slog.Info("consumer loop stopped", "topic", c.topic, "group", c.group)
@@ -86,9 +70,7 @@ func (c *Consumer) Run(ctx context.Context, handler MessageHandler) error {
 		err error
 	}
 
-	// pending is a channel of per-message result channels, enqueued in fetch order.
-	// Capacity = workers: at most `workers` messages are in-flight simultaneously.
-	pending := make(chan chan msgResult, workers)
+	pending := make(chan chan msgResult, workers) // ordered in-flight slots
 	fetchErrCh := make(chan error, 1)
 
 	innerCtx, cancel := context.WithCancel(ctx)
@@ -100,7 +82,6 @@ func (c *Consumer) Run(ctx context.Context, handler MessageHandler) error {
 		for {
 			msg, err := c.reader.FetchMessage(innerCtx)
 			if err != nil {
-				// Only report unexpected errors; context cancellations are normal shutdown.
 				if ctx.Err() == nil && innerCtx.Err() == nil {
 					fetchErrCh <- fmt.Errorf("fetch message: %w", err)
 				}
@@ -109,7 +90,7 @@ func (c *Consumer) Run(ctx context.Context, handler MessageHandler) error {
 
 			ch := make(chan msgResult, 1)
 			select {
-			case pending <- ch: // reserve an ordered slot before spawning worker
+			case pending <- ch:
 				go func(m kafka.Message) {
 					handlerErr := handler(ctx, m.Key, m.Value)
 					ch <- msgResult{msg: m, err: handlerErr}
@@ -130,9 +111,9 @@ func (c *Consumer) Run(ctx context.Context, handler MessageHandler) error {
 				"offset", r.msg.Offset,
 				"error_reason", r.err.Error(),
 			)
-			cancel() // stop fetcher
+			cancel()
 			for drain := range pending {
-				<-drain // let in-flight workers finish (results discarded, no commit)
+				<-drain // drain in-flight workers before returning
 			}
 			return r.err
 		}

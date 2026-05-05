@@ -26,11 +26,9 @@ type DLQPublisher interface {
 	Publish(ctx context.Context, original []byte, reason string) error
 }
 
-// Option configures a Handler.
 type Option func(*Handler)
 
-// WithMetrics attaches Prometheus metrics to the handler.
-// If not set, the handler runs without instrumentation.
+// WithMetrics attaches Prometheus instrumentation; optional.
 func WithMetrics(m *metrics.Metrics) Option {
 	return func(h *Handler) { h.metrics = m }
 }
@@ -151,14 +149,12 @@ func (h *Handler) sendToDLQ(ctx context.Context, original []byte, reason string)
 	return nil
 }
 
-// inc calls fn only when metrics are configured.
 func (h *Handler) inc(fn func(*metrics.Metrics)) {
 	if h.metrics != nil {
 		fn(h.metrics)
 	}
 }
 
-// observe records the processing duration only when metrics are configured.
 func (h *Handler) observe(start time.Time) {
 	if h.metrics != nil {
 		h.metrics.ProcessingDuration.Observe(time.Since(start).Seconds())
