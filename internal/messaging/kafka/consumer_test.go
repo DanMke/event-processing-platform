@@ -142,6 +142,24 @@ func TestRun_ContextCancelled_ReturnsNil(t *testing.T) {
 	}
 }
 
+// TestRun_CommitError_ReturnsError verifies that a CommitMessages failure is
+// propagated as a non-nil error from Run, preventing silent offset advancement.
+func TestRun_CommitError_ReturnsError(t *testing.T) {
+	r := &mockReader{
+		messages: []kafka.Message{
+			{Topic: "test-topic", Partition: 0, Offset: 5, Value: []byte("payload")},
+		},
+		commitErr: errors.New("broker unreachable"),
+	}
+	c := newConsumerWithMock(r)
+
+	err := c.Run(context.Background(), alwaysSucceedHandler)
+
+	if err == nil {
+		t.Error("expected error when CommitMessages fails, got nil")
+	}
+}
+
 // TestRun_MultipleMessages_AllCommitted verifies that every successfully
 // processed message in a batch gets its offset committed.
 func TestRun_MultipleMessages_AllCommitted(t *testing.T) {

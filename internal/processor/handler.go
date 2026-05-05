@@ -60,9 +60,12 @@ func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 			"status", "dlq",
 			"error_reason", err.Error(),
 		)
-		h.sendToDLQ(ctx, value, fmt.Sprintf("unmarshal: %v", err))
-		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.Inc(); m.EventsSentToDLQTotal.Inc() })
+		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.Inc() })
 		h.observe(start)
+		if dlqErr := h.sendToDLQ(ctx, value, fmt.Sprintf("unmarshal: %v", err)); dlqErr != nil {
+			return dlqErr
+		}
+		h.inc(func(m *metrics.Metrics) { m.EventsSentToDLQTotal.Inc() })
 		return nil
 	}
 
@@ -83,9 +86,12 @@ func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 			"status", "rejected",
 			"error_reason", err.Error(),
 		)
-		h.sendToDLQ(ctx, value, err.Error())
-		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.Inc(); m.EventsSentToDLQTotal.Inc() })
+		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.Inc() })
 		h.observe(start)
+		if dlqErr := h.sendToDLQ(ctx, value, err.Error()); dlqErr != nil {
+			return dlqErr
+		}
+		h.inc(func(m *metrics.Metrics) { m.EventsSentToDLQTotal.Inc() })
 		return nil
 	}
 
@@ -95,9 +101,12 @@ func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 			"status", "rejected",
 			"error_reason", err.Error(),
 		)
-		h.sendToDLQ(ctx, value, err.Error())
-		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.Inc(); m.EventsSentToDLQTotal.Inc() })
+		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.Inc() })
 		h.observe(start)
+		if dlqErr := h.sendToDLQ(ctx, value, err.Error()); dlqErr != nil {
+			return dlqErr
+		}
+		h.inc(func(m *metrics.Metrics) { m.EventsSentToDLQTotal.Inc() })
 		return nil
 	}
 
@@ -134,10 +143,12 @@ func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 	return nil
 }
 
-func (h *Handler) sendToDLQ(ctx context.Context, original []byte, reason string) {
+func (h *Handler) sendToDLQ(ctx context.Context, original []byte, reason string) error {
 	if err := h.dlq.Publish(ctx, original, reason); err != nil {
 		slog.Error("DLQ publish failed", "error_reason", err.Error())
+		return fmt.Errorf("dlq publish: %w", err)
 	}
+	return nil
 }
 
 // inc calls fn only when metrics are configured.

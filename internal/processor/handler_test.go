@@ -162,6 +162,40 @@ func TestHandle_SaveError_ReturnsErrorWithoutDLQ(t *testing.T) {
 	}
 }
 
+func TestHandle_DLQFail_InvalidJSON_ReturnsError(t *testing.T) {
+	dlq := &mockDLQ{err: errors.New("dlq unavailable")}
+	h := processor.NewHandler(&mockRepo{}, &mockValidator{}, dlq)
+
+	err := h.Handle(context.Background(), nil, []byte(`not-valid-json`))
+
+	if err == nil {
+		t.Error("expected error when DLQ publish fails after unmarshal error, got nil")
+	}
+}
+
+func TestHandle_DLQFail_InvalidEnvelope_ReturnsError(t *testing.T) {
+	dlq := &mockDLQ{err: errors.New("dlq unavailable")}
+	h := processor.NewHandler(&mockRepo{}, &mockValidator{}, dlq)
+
+	err := h.Handle(context.Background(), nil, []byte(`{"event_id":"evt-001"}`))
+
+	if err == nil {
+		t.Error("expected error when DLQ publish fails after envelope error, got nil")
+	}
+}
+
+func TestHandle_DLQFail_InvalidPayload_ReturnsError(t *testing.T) {
+	dlq := &mockDLQ{err: errors.New("dlq unavailable")}
+	validator := &mockValidator{err: errors.New("schema mismatch")}
+	h := processor.NewHandler(&mockRepo{}, validator, dlq)
+
+	err := h.Handle(context.Background(), nil, validEventBytes(t))
+
+	if err == nil {
+		t.Error("expected error when DLQ publish fails after payload error, got nil")
+	}
+}
+
 func TestHandle_Success(t *testing.T) {
 	repo := &mockRepo{}
 	dlq := &mockDLQ{}

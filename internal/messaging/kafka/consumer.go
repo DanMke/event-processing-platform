@@ -144,6 +144,7 @@ func (c *Consumer) Run(ctx context.Context, handler MessageHandler) error {
 				"offset", r.msg.Offset,
 				"error_reason", err.Error(),
 			)
+			return fmt.Errorf("commit offset %d: %w", r.msg.Offset, err)
 		}
 	}
 
