@@ -40,3 +40,33 @@ build:
 ## tidy: download and tidy dependencies
 tidy:
 	$(GO) mod tidy
+
+## test: run all tests
+test:
+	$(GO) test ./...
+
+## run: start infra, migrate and run processor
+run: up create-topic migrate processor
+
+## restart: restart all services
+restart: down up
+
+## clean: remove build artifacts
+clean:
+	rm -rf bin/
+
+## fmt: format Go code
+fmt:
+	$(GO) fmt ./...
+
+## lint: run linter
+lint:
+	golangci-lint run
+
+## metrics: curl metrics endpoint
+metrics:
+	curl http://localhost:2112/metrics
+
+## ps: list running containers
+ps:
+	$(DOCKER) ps

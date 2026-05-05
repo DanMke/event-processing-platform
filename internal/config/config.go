@@ -53,6 +53,16 @@ func LoadDLQ() DLQ {
 	}
 }
 
+type ObservabilityConfig struct {
+	MetricsPort string
+}
+
+func LoadObservability() ObservabilityConfig {
+	return ObservabilityConfig{
+		MetricsPort: getEnv("METRICS_PORT", "2112"),
+	}
+}
+
 func splitBrokers(v string) []string {
 	return strings.Split(v, ",")
 }

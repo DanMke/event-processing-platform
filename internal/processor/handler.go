@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
+	"time"
 
 	"github.com/DanMke/event-processing-platform/internal/domain"
+	"github.com/DanMke/event-processing-platform/internal/observability/metrics"
 	"github.com/DanMke/event-processing-platform/internal/retry"
 	"github.com/DanMke/event-processing-platform/internal/validation"
 )
@@ -24,69 +26,130 @@ type DLQPublisher interface {
 	Publish(ctx context.Context, original []byte, reason string) error
 }
 
+// Option configures a Handler.
+type Option func(*Handler)
+
+// WithMetrics attaches Prometheus metrics to the handler.
+// If not set, the handler runs without instrumentation.
+func WithMetrics(m *metrics.Metrics) Option {
+	return func(h *Handler) { h.metrics = m }
+}
+
 type Handler struct {
 	repo      Repository
 	validator Validator
 	dlq       DLQPublisher
+	metrics   *metrics.Metrics
 }
 
-func NewHandler(repo Repository, validator Validator, dlq DLQPublisher) *Handler {
-	return &Handler{repo: repo, validator: validator, dlq: dlq}
+func NewHandler(repo Repository, validator Validator, dlq DLQPublisher, opts ...Option) *Handler {
+	h := &Handler{repo: repo, validator: validator, dlq: dlq}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
+	start := time.Now()
+
+	// --- unmarshal ---
 	var event domain.Event
 	if err := json.Unmarshal(value, &event); err != nil {
-		log.Printf("unmarshal error, sending to dlq: %v", err)
+		slog.Error("unmarshal failed",
+			"status", "dlq",
+			"error_reason", err.Error(),
+		)
 		h.sendToDLQ(ctx, value, fmt.Sprintf("unmarshal: %v", err))
+		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.Inc(); m.EventsSentToDLQTotal.Inc() })
+		h.observe(start)
 		return nil
 	}
 
-	log.Printf("event received id=%s type=%s tenant=%s schema=%s producer=%s trace=%s",
-		event.EventID, event.EventType, event.TenantID,
-		event.SchemaVersion, event.Producer, event.TraceID,
+	logger := slog.With(
+		"event_id", event.EventID,
+		"tenant_id", event.TenantID,
+		"event_type", event.EventType,
+		"schema_version", event.SchemaVersion,
+		"producer", event.Producer,
+		"trace_id", event.TraceID,
 	)
 
+	logger.Info("event received")
+
+	// --- envelope validation ---
 	if err := validation.ValidateEnvelope(event); err != nil {
-		log.Printf("invalid envelope id=%s type=%s tenant=%s: %v",
-			event.EventID, event.EventType, event.TenantID, err)
+		logger.Warn("invalid envelope",
+			"status", "rejected",
+			"error_reason", err.Error(),
+		)
 		h.sendToDLQ(ctx, value, err.Error())
+		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.Inc(); m.EventsSentToDLQTotal.Inc() })
+		h.observe(start)
 		return nil
 	}
 
+	// --- payload validation ---
 	if err := h.validator.ValidatePayload(event); err != nil {
-		log.Printf("invalid payload id=%s type=%s tenant=%s: %v",
-			event.EventID, event.EventType, event.TenantID, err)
+		logger.Warn("invalid payload",
+			"status", "rejected",
+			"error_reason", err.Error(),
+		)
 		h.sendToDLQ(ctx, value, err.Error())
+		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.Inc(); m.EventsSentToDLQTotal.Inc() })
+		h.observe(start)
 		return nil
 	}
 
+	// --- persist with retry ---
 	var isDuplicate bool
 	saveErr := retry.Do(ctx, func() error {
 		err := h.repo.Save(ctx, event)
 		if errors.Is(err, domain.ErrDuplicateEvent) {
 			isDuplicate = true
-			return nil // stop retrying
+			return nil
 		}
 		return err
 	})
 
+	h.observe(start)
+
 	if isDuplicate {
-		log.Printf("duplicate event id=%s type=%s tenant=%s",
-			event.EventID, event.EventType, event.TenantID)
+		logger.Info("duplicate event ignored", "status", "skipped")
+		h.inc(func(m *metrics.Metrics) { m.EventsDuplicatedTotal.Inc() })
 		return nil
 	}
 
 	if saveErr != nil {
+		logger.Error("save failed after retries",
+			"status", "failed",
+			"error_reason", saveErr.Error(),
+		)
+		h.inc(func(m *metrics.Metrics) { m.EventsFailedTotal.Inc() })
 		return fmt.Errorf("save event: %w", saveErr)
 	}
 
-	log.Printf("event persisted id=%s type=%s tenant=%s", event.EventID, event.EventType, event.TenantID)
+	logger.Info("event persisted", "status", "success")
+	h.inc(func(m *metrics.Metrics) { m.EventsProcessedTotal.Inc() })
 	return nil
 }
 
 func (h *Handler) sendToDLQ(ctx context.Context, original []byte, reason string) {
 	if err := h.dlq.Publish(ctx, original, reason); err != nil {
-		log.Printf("dlq publish failed: %v", err)
+		slog.Error("DLQ publish failed", "error_reason", err.Error())
+	}
+}
+
+// inc calls fn only when metrics are configured.
+func (h *Handler) inc(fn func(*metrics.Metrics)) {
+	if h.metrics != nil {
+		fn(h.metrics)
+	}
+}
+
+// observe records the processing duration only when metrics are configured.
+func (h *Handler) observe(start time.Time) {
+	if h.metrics != nil {
+		h.metrics.ProcessingDuration.Observe(time.Since(start).Seconds())
 	}
 }

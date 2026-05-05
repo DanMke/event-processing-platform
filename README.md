@@ -62,8 +62,14 @@ docker exec -it postgres psql -U events -d events -c \
 
 Acesse [http://localhost:8080](http://localhost:8080) e selecione o cluster `local`.
 
-- **raw-events** -> eventos publicados pelo producer
-- **failed-events** -> eventos rejeitados (envelope inválido, schema inválido, JSON malformado)
+- **raw-events** → eventos publicados pelo producer
+- **failed-events** → eventos rejeitados (envelope inválido, schema inválido, JSON malformado)
+
+### 7. Consultar métricas do processor
+
+```bash
+curl http://localhost:2112/metrics
+```
 
 ### Resumo: make up && make create-topic && make migrate → make processor → make producer
 
@@ -78,6 +84,8 @@ Acesse [http://localhost:8080](http://localhost:8080) e selecione o cluster `loc
 | `KAFKA_GROUP_ID`  | `event-processor`                                                | Consumer group (processor only)  |
 | `KAFKA_DLQ_TOPIC` | `failed-events`                                                  | Tópico de dead letter            |
 | `POSTGRES_DSN`    | `postgres://events:events@localhost:5432/events?sslmode=disable` | Connection string do Postgres    |
+| `METRICS_PORT`    | `2112`                                                           | Porta do servidor de métricas    |
+| `LOG_FORMAT`      | `text`                                                           | Formato dos logs (`text` ou `json`) |
 
 ---
 
@@ -93,6 +101,9 @@ event-processing-platform/
 │   ├── dlq/                   # Dead-letter queue publisher
 │   ├── domain/                # Struct Event e erros de domínio
 │   ├── messaging/kafka/       # Abstrações de producer e consumer
+│   ├── observability/
+│   │   ├── logger.go          # Inicialização do slog (text/json via LOG_FORMAT)
+│   │   └── metrics/           # Métricas Prometheus do processor
 │   ├── processor/             # Handler: unmarshal → validate → retry → persist
 │   ├── producer/              # Service: build → publish
 │   ├── repository/postgres/
@@ -188,8 +199,51 @@ Falhas de persistência disparam até 3 retries com backoff incremental (100ms, 
 
 ---
 
+## Métricas
+
+O processor expõe um endpoint Prometheus em `http://localhost:2112/metrics` (porta configurável via `METRICS_PORT`).
+
+| Métrica | Tipo | Descrição |
+|---|---|---|
+| `events_processed_total` | Counter | Eventos validados e persistidos com sucesso |
+| `events_failed_total` | Counter | Eventos que falharam por erro transitório após retries |
+| `events_invalid_total` | Counter | Eventos rejeitados por JSON, envelope ou payload inválido |
+| `events_duplicated_total` | Counter | Duplicatas ignoradas (idempotência) |
+| `events_sent_to_dlq_total` | Counter | Eventos encaminhados para a DLQ |
+| `event_processing_duration_seconds` | Histogram | Tempo de processamento por evento (unmarshal → persist) |
+
+Além dessas, o endpoint também expõe métricas padrão do runtime Go (`go_*`) e do processo (`process_*`).
+
+**Exemplo de saída:**
+```
+events_processed_total 2
+events_invalid_total 0
+events_duplicated_total 0
+events_failed_total 0
+events_sent_to_dlq_total 0
+event_processing_duration_seconds_bucket{le="0.005"} 2
+```
+
+---
+
+## Logs estruturados
+
+Os logs usam `log/slog` com campos consistentes em todos os eventos:
+
+```
+time=2026-05-04T20:00:00Z level=INFO msg="event received" event_id=evt-001 tenant_id=client-a event_type=contract.created schema_version=1.0 producer=sample-producer trace_id=trace-123
+time=2026-05-04T20:00:00Z level=INFO msg="event persisted" event_id=evt-001 tenant_id=client-a event_type=contract.created schema_version=1.0 producer=sample-producer trace_id=trace-123 status=success
+```
+
+Para formato JSON (recomendado em produção):
+```bash
+LOG_FORMAT=json make processor
+```
+
+---
+
 ## Próximos passos planejados
 
-- Observabilidade com OpenTelemetry
+- OpenTelemetry (tracing distribuído)
 - Infraestrutura como código (Terraform / LocalStack)
 - Teste de carga

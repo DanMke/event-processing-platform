@@ -3,7 +3,7 @@ package kafka
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/segmentio/kafka-go"
 )
@@ -37,8 +37,8 @@ func NewConsumer(brokers []string, topic, groupID string) *Consumer {
 }
 
 func (c *Consumer) Run(ctx context.Context, handler MessageHandler) error {
-	log.Printf("consumer loop started topic=%s group=%s", c.topic, c.group)
-	defer log.Printf("consumer loop stopped topic=%s group=%s", c.topic, c.group)
+	slog.Info("consumer loop started", "topic", c.topic, "group", c.group)
+	defer slog.Info("consumer loop stopped", "topic", c.topic, "group", c.group)
 
 	for {
 		msg, err := c.reader.FetchMessage(ctx)
@@ -50,14 +50,22 @@ func (c *Consumer) Run(ctx context.Context, handler MessageHandler) error {
 		}
 
 		if err := handler(ctx, msg.Key, msg.Value); err != nil {
-			log.Printf("handler error -> offset not committed, will reprocess topic=%s partition=%d offset=%d: %v",
-				msg.Topic, msg.Partition, msg.Offset, err)
+			slog.Warn("handler error — offset not committed, will reprocess",
+				"topic", msg.Topic,
+				"partition", msg.Partition,
+				"offset", msg.Offset,
+				"error_reason", err.Error(),
+			)
 			continue
 		}
 
 		if err := c.reader.CommitMessages(ctx, msg); err != nil {
-			log.Printf("commit error topic=%s partition=%d offset=%d: %v",
-				msg.Topic, msg.Partition, msg.Offset, err)
+			slog.Error("offset commit failed",
+				"topic", msg.Topic,
+				"partition", msg.Partition,
+				"offset", msg.Offset,
+				"error_reason", err.Error(),
+			)
 		}
 	}
 }
