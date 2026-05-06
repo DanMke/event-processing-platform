@@ -120,9 +120,11 @@ What the skeleton already does:
 - Joins `delivery_targets` to read the kind and config.
 - Routes each row to the `Dispatcher`.
 - Marks the row as `sent` on success or `failed` on dispatch error, incrementing `attempts` either way.
-- Exposes `/healthz` for Docker health checks.
+- Exposes `/healthz` on `SENDER_HEALTH_PORT` for health checks.
 
 The default `Dispatcher` is `LogDispatcher` -> it logs `"would deliver"` with the kind, target id, tenant, and event id. Replacing it with a real adapter is a localized change in `cmd/sender/main.go`.
+
+One important production detail: the skeleton dispatches while holding the batch transaction because the default dispatcher only logs. Real adapters should avoid external I/O inside the claim transaction. A production sender would normally claim or reserve rows quickly, commit, dispatch outside the transaction, and then update each row as `sent` or `failed`.
 
 Run locally:
 
@@ -136,6 +138,7 @@ Tunables:
 | --- | --- | --- |
 | `SENDER_POLL_INTERVAL_MS` | `1000` | Wait between batches |
 | `SENDER_BATCH_SIZE` | `50` | Maximum rows per tick |
+| `SENDER_HEALTH_PORT` | `2113` | Sender health endpoint port |
 
 Integration tests under `internal/sender` exercise the SQL against a real PostgreSQL container, including the dispatcher-failure path and batch-size enforcement.
 
@@ -496,6 +499,14 @@ Load generator settings:
 | `DUPLICATE_RATIO` | `0.02` | Ratio of duplicate events |
 | `CONCURRENCY` | `4` | Load generator concurrency |
 
+Sender settings:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SENDER_POLL_INTERVAL_MS` | `1000` | Wait between outbox polling ticks |
+| `SENDER_BATCH_SIZE` | `50` | Maximum outbox rows claimed per tick |
+| `SENDER_HEALTH_PORT` | `2113` | Sender `/healthz` port |
+
 ## Tests
 
 Run unit tests:
@@ -531,8 +542,8 @@ The current workflow:
 4. Fails if `gofmt` would change files.
 5. Runs `go vet ./...`.
 6. Runs unit tests with `go test ./...`.
-7. Runs integration tests with `go test -tags=integration -v ./internal/repository/postgres/...`.
-8. Builds `processor`, `producer`, and `loadgen`.
+7. Runs integration tests with `go test -tags=integration -v ./internal/repository/postgres/... ./internal/sender/...`.
+8. Builds `processor`, `producer`, `loadgen`, and `sender`.
 
 The purpose of the CI is not only to run tests. It also proves that a fresh Linux environment can build and validate the project from scratch.
 
@@ -614,16 +625,17 @@ Deployment flow:
 
 The most valuable next steps are:
 
-1. Implement the sender service.
-2. Add `FOR UPDATE SKIP LOCKED` based outbox polling.
-3. Replace ad-hoc SQL execution with a migration tool.
-4. Add dashboards and basic alerts.
-5. Add Terraform for the AWS target architecture.
-6. Extend CI to build and publish Docker images to ECR.
-7. Document schema evolution rules.
+1. Implement concrete sender adapters.
+2. Move real sender dispatch outside the outbox claim transaction.
+3. Add retry/backoff scheduling for failed outbox rows.
+4. Replace ad-hoc SQL execution with a migration tool.
+5. Add dashboards and basic alerts.
+6. Add Terraform for the AWS target architecture.
+7. Extend CI to build and publish Docker images to ECR.
+8. Document schema evolution rules.
 
 ## Notes on Scope
 
 The core implementation is focused on the event processor because that is the critical part of the case.
 
-The AWS and IaC sections describe a realistic deployment path, but they are not presented as completed work. The same applies to the sender: the database model is ready for it, but the service itself is still a follow-up.
+The AWS and IaC sections describe a realistic deployment path, but they are not presented as completed work. The sender currently defines the outbox polling and dispatch contract; concrete delivery adapters and production delivery semantics are still follow-ups.
