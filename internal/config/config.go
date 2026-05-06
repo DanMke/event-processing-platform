@@ -36,6 +36,7 @@ type ObservabilityConfig struct {
 type Sender struct {
 	PollInterval time.Duration
 	BatchSize    int
+	HealthPort   string
 }
 
 func LoadProcessor() Processor {
@@ -78,6 +79,7 @@ func LoadSender() Sender {
 	return Sender{
 		PollInterval: time.Duration(getEnvInt("SENDER_POLL_INTERVAL_MS", 1000)) * time.Millisecond,
 		BatchSize:    getEnvInt("SENDER_BATCH_SIZE", 50),
+		HealthPort:   getEnv("SENDER_HEALTH_PORT", "2113"),
 	}
 }
 

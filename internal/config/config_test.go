@@ -80,3 +80,39 @@ func TestLoadPostgres_FromEnv(t *testing.T) {
 		t.Errorf("expected DSN %q, got %q", want, cfg.DSN)
 	}
 }
+
+func TestLoadSender_Defaults(t *testing.T) {
+	t.Setenv("SENDER_POLL_INTERVAL_MS", "")
+	t.Setenv("SENDER_BATCH_SIZE", "")
+	t.Setenv("SENDER_HEALTH_PORT", "")
+
+	cfg := config.LoadSender()
+
+	if cfg.PollInterval.Milliseconds() != 1000 {
+		t.Errorf("expected poll interval 1000ms, got %d", cfg.PollInterval.Milliseconds())
+	}
+	if cfg.BatchSize != 50 {
+		t.Errorf("expected batch size 50, got %d", cfg.BatchSize)
+	}
+	if cfg.HealthPort != "2113" {
+		t.Errorf("expected health port 2113, got %s", cfg.HealthPort)
+	}
+}
+
+func TestLoadSender_FromEnv(t *testing.T) {
+	t.Setenv("SENDER_POLL_INTERVAL_MS", "250")
+	t.Setenv("SENDER_BATCH_SIZE", "10")
+	t.Setenv("SENDER_HEALTH_PORT", "9091")
+
+	cfg := config.LoadSender()
+
+	if cfg.PollInterval.Milliseconds() != 250 {
+		t.Errorf("expected poll interval 250ms, got %d", cfg.PollInterval.Milliseconds())
+	}
+	if cfg.BatchSize != 10 {
+		t.Errorf("expected batch size 10, got %d", cfg.BatchSize)
+	}
+	if cfg.HealthPort != "9091" {
+		t.Errorf("expected health port 9091, got %s", cfg.HealthPort)
+	}
+}

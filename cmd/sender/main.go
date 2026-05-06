@@ -18,7 +18,6 @@ func main() {
 	observability.Init()
 
 	pgCfg := config.LoadPostgres()
-	obsCfg := config.LoadObservability()
 	senderCfg := config.LoadSender()
 
 	poolCfg, err := pgxpool.ParseConfig(pgCfg.DSN)
@@ -44,7 +43,7 @@ func main() {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"status":"ok"}`))
 		})
-		addr := ":" + obsCfg.MetricsPort
+		addr := ":" + senderCfg.HealthPort
 		slog.Info("sender health server listening", "addr", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
 			slog.Error("health server stopped", "error_reason", err.Error())
@@ -60,7 +59,7 @@ func main() {
 		"poll_interval_ms", senderCfg.PollInterval.Milliseconds(),
 		"batch_size", senderCfg.BatchSize,
 		"pg_max_conns", pgCfg.MaxConns,
-		"health_port", obsCfg.MetricsPort,
+		"health_port", senderCfg.HealthPort,
 	)
 
 	if err := poller.Run(ctx); err != nil && err != context.Canceled {
