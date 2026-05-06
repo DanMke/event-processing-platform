@@ -153,31 +153,54 @@ func generate(total, tenants int, invalidRatio, dupRatio float64) []eventJob {
 }
 
 func buildValidEvent(eid, tid string, idx int, now time.Time) domain.Event {
-	if idx%2 == 0 {
-		p, _ := json.Marshal(map[string]any{
-			"contract_id": fmt.Sprintf("contract-%d", idx),
-			"amount":      (idx + 1) * 100,
-			"currency":    "BRL",
-		})
-		return domain.Event{
-			EventID: eid, TenantID: tid,
-			EventType: "contract.created", SchemaVersion: "1.0",
-			OccurredAt: now, Producer: "loadgen",
-			TraceID: fmt.Sprintf("trace-%d", idx),
-			Payload: json.RawMessage(p),
-		}
-	}
-	p, _ := json.Marshal(map[string]any{
-		"contract_id": fmt.Sprintf("contract-%d", idx),
-		"reason":      "customer_request",
-	})
-	return domain.Event{
-		EventID: eid, TenantID: tid,
-		EventType: "contract.cancelled", SchemaVersion: "1.0",
+	base := domain.Event{
+		EventID: eid, TenantID: tid, SchemaVersion: "1.0",
 		OccurredAt: now, Producer: "loadgen",
 		TraceID: fmt.Sprintf("trace-%d", idx),
-		Payload: json.RawMessage(p),
 	}
+	switch idx % 5 {
+	case 0:
+		p, _ := json.Marshal(map[string]any{
+			"contract_id": fmt.Sprintf("contract-%d", idx),
+			"amount":      float64((idx + 1) * 100),
+			"currency":    "BRL",
+		})
+		base.EventType, base.Payload = "contract.created", json.RawMessage(p)
+	case 1:
+		p, _ := json.Marshal(map[string]any{
+			"contract_id": fmt.Sprintf("contract-%d", idx),
+			"reason":      "customer_request",
+		})
+		base.EventType, base.Payload = "contract.cancelled", json.RawMessage(p)
+	case 2:
+		p, _ := json.Marshal(map[string]any{
+			"transaction_id": fmt.Sprintf("txn-%d", idx),
+			"amount":         float64((idx + 1) * 50),
+			"currency":       "BRL",
+			"merchant_id":    fmt.Sprintf("merchant-%d", idx%10),
+			"card_last_four": fmt.Sprintf("%04d", idx%10000),
+		})
+		base.EventType, base.Payload = "payment.processed", json.RawMessage(p)
+	case 3:
+		reasons := []string{"insufficient_funds", "card_blocked", "expired_card", "fraud_detected"}
+		p, _ := json.Marshal(map[string]any{
+			"transaction_id": fmt.Sprintf("txn-fail-%d", idx),
+			"amount":         float64((idx + 1) * 75),
+			"currency":       "BRL",
+			"merchant_id":    fmt.Sprintf("merchant-%d", idx%10),
+			"failure_reason": reasons[idx%len(reasons)],
+		})
+		base.EventType, base.Payload = "payment.failed", json.RawMessage(p)
+	default:
+		types := []string{"checking", "savings", "credit"}
+		p, _ := json.Marshal(map[string]any{
+			"account_id":   fmt.Sprintf("acc-%d", idx),
+			"account_type": types[idx%len(types)],
+			"owner_id":     fmt.Sprintf("owner-%d", idx%100),
+		})
+		base.EventType, base.Payload = "account.created", json.RawMessage(p)
+	}
+	return base
 }
 
 func buildInvalidEvent(idx int, tid string, now time.Time) (key, value []byte) {

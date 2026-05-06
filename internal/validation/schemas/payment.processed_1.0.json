@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["transaction_id", "amount", "currency", "merchant_id", "card_last_four"],
+  "properties": {
+    "transaction_id":  { "type": "string" },
+    "amount":          { "type": "number", "minimum": 0 },
+    "currency":        { "type": "string", "minLength": 3, "maxLength": 3 },
+    "merchant_id":     { "type": "string" },
+    "card_last_four":  { "type": "string", "pattern": "^[0-9]{4}$" }
+  },
+  "additionalProperties": false
+}

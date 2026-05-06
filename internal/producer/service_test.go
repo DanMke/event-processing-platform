@@ -28,8 +28,8 @@ func TestPublishSampleEvents_Success(t *testing.T) {
 	if err := svc.PublishSampleEvents(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(pub.calls) != 2 {
-		t.Errorf("expected 2 events published, got %d", len(pub.calls))
+	if len(pub.calls) != 5 {
+		t.Errorf("expected 5 events published, got %d", len(pub.calls))
 	}
 }
 
