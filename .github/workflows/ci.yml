@@ -40,10 +40,11 @@ jobs:
         run: go test ./...
 
       - name: Run integration tests
-        run: go test -tags=integration -v ./internal/repository/postgres/...
+        run: go test -tags=integration -v ./internal/repository/postgres/... ./internal/sender/...
 
       - name: Build binaries
         run: |
           go build -o /tmp/processor ./cmd/processor
           go build -o /tmp/producer ./cmd/producer
           go build -o /tmp/loadgen ./cmd/loadgen
+          go build -o /tmp/sender ./cmd/sender
