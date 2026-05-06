@@ -2,22 +2,27 @@ GO           := go
 DOCKER       := docker compose -f infra/docker-compose.yml
 DOCKER_LOAD  := docker compose -f infra/docker-compose.yml --profile loadgen
 
-TOTAL_EVENTS    ?= 1000
-TENANTS         ?= 5
-INVALID_RATIO   ?= 0.05
-DUPLICATE_RATIO ?= 0.02
-CONCURRENCY     ?= 4
-SCALE           ?= 3
-KAFKA_WORKERS   ?= 4
+TOTAL_EVENTS       ?= 1000
+TENANTS            ?= 5
+INVALID_RATIO      ?= 0.05
+DUPLICATE_RATIO    ?= 0.02
+CONCURRENCY        ?= 4
+SCALE              ?= 3
+KAFKA_WORKERS      ?= 4
 POSTGRES_MAX_CONNS ?= 20
 
-.PHONY: up down logs create-topic migrate producer processor \
-        load-test load-test-docker scale-processor \
-        test fmt tidy build docker-build metrics ps \
+.PHONY: up down logs ps \
+        create-topic migrate \
+        build docker-build \
+        test test-integration fmt tidy \
+        processor producer load-test load-test-docker \
+        scale-processor health metrics \
         demo demo-scale
 
+# ── infra ──────────────────────────────────────────────────────────────────────
+
 up:
-	$(DOCKER) up -d
+	$(DOCKER) up -d --build
 
 down:
 	$(DOCKER) down -v
@@ -25,18 +30,65 @@ down:
 logs:
 	$(DOCKER) logs -f
 
+ps:
+	$(DOCKER) ps
+
+# ── setup ──────────────────────────────────────────────────────────────────────
+
 create-topic:
-	bash scripts/create-topics.sh
+	docker exec kafka sh -c "until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list >/dev/null 2>&1; do sleep 2; done"
+	docker exec kafka /opt/kafka/bin/kafka-topics.sh \
+		--bootstrap-server kafka:29092 \
+		--create \
+		--if-not-exists \
+		--topic raw-events \
+		--partitions 3 \
+		--replication-factor 1
+	docker exec kafka /opt/kafka/bin/kafka-topics.sh \
+		--bootstrap-server kafka:29092 \
+		--create \
+		--if-not-exists \
+		--topic failed-events \
+		--partitions 3 \
+		--replication-factor 1
 
 migrate:
 	docker exec -i postgres psql -U events -d events \
 		< internal/repository/postgres/migrations/001_create_events_table.sql
+	docker exec -i postgres psql -U events -d events \
+		< internal/repository/postgres/migrations/002_create_delivery_tables.sql
 
-producer:
-	$(GO) run ./cmd/producer
+# ── build ──────────────────────────────────────────────────────────────────────
+
+tidy:
+	$(GO) mod tidy
+
+fmt:
+	$(GO) fmt ./...
+
+build: tidy
+	$(GO) build -o bin/processor ./cmd/processor
+	$(GO) build -o bin/producer  ./cmd/producer
+	$(GO) build -o bin/loadgen   ./cmd/loadgen
+
+docker-build: tidy
+	$(DOCKER) build processor loadgen
+
+# ── test ───────────────────────────────────────────────────────────────────────
+
+test:
+	$(GO) test ./...
+
+test-integration:
+	$(GO) test -tags=integration -v ./internal/repository/postgres/...
+
+# ── run local ──────────────────────────────────────────────────────────────────
 
 processor:
 	$(GO) run ./cmd/processor
+
+producer:
+	$(GO) run ./cmd/producer
 
 load-test:
 	TOTAL_EVENTS=$(TOTAL_EVENTS) TENANTS=$(TENANTS) \
@@ -44,62 +96,44 @@ load-test:
 	CONCURRENCY=$(CONCURRENCY) \
 	$(GO) run ./cmd/loadgen
 
+# ── run docker ─────────────────────────────────────────────────────────────────
+
 load-test-docker:
-	TOTAL_EVENTS=$(TOTAL_EVENTS) TENANTS=$(TENANTS) \
-	INVALID_RATIO=$(INVALID_RATIO) DUPLICATE_RATIO=$(DUPLICATE_RATIO) \
-	CONCURRENCY=$(CONCURRENCY) \
-	$(DOCKER_LOAD) run --rm loadgen
+	$(DOCKER_LOAD) run --rm --build \
+		-e TOTAL_EVENTS=$(TOTAL_EVENTS) \
+		-e TENANTS=$(TENANTS) \
+		-e INVALID_RATIO=$(INVALID_RATIO) \
+		-e DUPLICATE_RATIO=$(DUPLICATE_RATIO) \
+		-e CONCURRENCY=$(CONCURRENCY) \
+		loadgen
 
 scale-processor:
-	KAFKA_WORKERS=$(KAFKA_WORKERS) POSTGRES_MAX_CONNS=$(POSTGRES_MAX_CONNS) \
-	$(DOCKER) up -d --scale processor=$(SCALE)
-	@echo ""
-	@echo "$(SCALE) instâncias do processor rodando (workers=$(KAFKA_WORKERS), pg_max_conns=$(POSTGRES_MAX_CONNS))."
+	$(DOCKER) up -d --build --scale processor=$(SCALE)
+	@echo "$(SCALE) instâncias do processor (workers=$(KAFKA_WORKERS), pg_max_conns=$(POSTGRES_MAX_CONNS))"
 	@echo "Kafka UI → http://localhost:8080 → Consumer Groups → event-processor"
 
-test:
-	$(GO) test ./...
+# ── observability ──────────────────────────────────────────────────────────────
 
-fmt:
-	$(GO) fmt ./...
-
-tidy:
-	$(GO) mod tidy
-
-build:
-	$(GO) build -o bin/processor ./cmd/processor
-	$(GO) build -o bin/producer  ./cmd/producer
-	$(GO) build -o bin/loadgen   ./cmd/loadgen
-
-docker-build:
-	docker build --build-arg BINARY=processor -t event-processor:latest .
-	docker build --build-arg BINARY=loadgen   -t event-loadgen:latest   .
+health:
+	$(DOCKER) exec -T processor wget -qO- http://localhost:2112/healthz
 
 metrics:
-	@CONTAINER=$$(docker ps -q --filter "label=com.docker.compose.service=processor" | head -1); \
-	if [ -n "$$CONTAINER" ]; then \
-		docker exec $$CONTAINER wget -qO- http://localhost:2112/metrics; \
-	else \
-		curl -s http://localhost:2112/metrics; \
-	fi
+	$(DOCKER) exec -T processor wget -qO- http://localhost:2112/metrics
 
-ps:
-	$(DOCKER) ps
+# ── demo ───────────────────────────────────────────────────────────────────────
 
-demo:
-	$(DOCKER) up -d kafka postgres kafka-ui prometheus
+demo: docker-build
+	$(DOCKER) up -d kafka postgres kafka-ui
 	$(MAKE) create-topic
 	$(MAKE) migrate
-	$(DOCKER) up -d processor
-	@echo "Aguardando processor inicializar..."
-	sleep 3
+	$(DOCKER) up -d --build processor
+	$(DOCKER) up -d prometheus
 	$(MAKE) load-test-docker TOTAL_EVENTS=500 TENANTS=5 INVALID_RATIO=0.05 DUPLICATE_RATIO=0.02 CONCURRENCY=4
 
-demo-scale:
-	$(DOCKER) up -d kafka postgres kafka-ui prometheus
+demo-scale: docker-build
+	$(DOCKER) up -d kafka postgres kafka-ui
 	$(MAKE) create-topic
 	$(MAKE) migrate
 	$(MAKE) scale-processor SCALE=3
-	@echo "Aguardando processors inicializarem..."
-	sleep 5
+	$(DOCKER) up -d prometheus
 	$(MAKE) load-test-docker TOTAL_EVENTS=5000 TENANTS=10 INVALID_RATIO=0.05 DUPLICATE_RATIO=0.02 CONCURRENCY=20
