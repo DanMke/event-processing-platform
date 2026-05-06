@@ -19,9 +19,9 @@ func NewEventRepository(pool *pgxpool.Pool) *EventRepository {
 	return &EventRepository{pool: pool}
 }
 
-// Save persists the event and enqueues one outbox row per active delivery
-// target registered for the tenant — all in a single transaction.
-// If no target is registered the event is saved with no outbox entry.
+// Save persists the event and enqueues outbox rows for active tenant targets.
+// The event and outbox rows are written in one transaction.
+// Tenants without targets only persist the event.
 func (r *EventRepository) Save(ctx context.Context, event domain.Event) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -29,7 +29,6 @@ func (r *EventRepository) Save(ctx context.Context, event domain.Event) error {
 	}
 	defer tx.Rollback(ctx)
 
-	// --- persist event ---
 	result, err := tx.Exec(ctx, `
 		INSERT INTO events
 			(event_id, tenant_id, event_type, schema_version, producer, trace_id, payload, occurred_at, processed_at)
@@ -54,14 +53,12 @@ func (r *EventRepository) Save(ctx context.Context, event domain.Event) error {
 		return domain.ErrDuplicateEvent
 	}
 
-	// --- triage: enqueue outbox for each active target ---
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal outbox payload: %w", err)
 	}
 
-	// Collect all target IDs before closing the cursor — pgx does not allow
-	// a second statement on the same connection while rows is still open.
+	// Close rows before inserting; pgx disallows another statement while rows is open.
 	rows, err := tx.Query(ctx,
 		`SELECT id FROM delivery_targets WHERE tenant_id = $1 AND active = true`,
 		event.TenantID,

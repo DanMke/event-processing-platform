@@ -5,12 +5,11 @@ import (
 	"time"
 )
 
-// DefaultDelays defines the wait durations between successive retries.
+// DefaultDelays are used when no retry delays are provided.
 var DefaultDelays = []time.Duration{2 * time.Second, 3 * time.Second, 5 * time.Second}
 
-// Do calls fn immediately, then retries up to len(delays) times with increasing waits.
-// Stops early on success or context cancellation.
-// Pass explicit delays to override DefaultDelays (useful in tests).
+// Do runs fn once, then retries after each delay until success or context cancellation.
+// Passing delays overrides DefaultDelays.
 func Do(ctx context.Context, fn func() error, delays ...time.Duration) error {
 	if len(delays) == 0 {
 		delays = DefaultDelays

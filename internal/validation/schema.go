@@ -56,10 +56,8 @@ func schemaKey(eventType, schemaVersion string) string {
 	return eventType + "/" + schemaVersion
 }
 
-// loadSchemas reads all *.json files from the schemas/ directory and compiles them.
-// Naming convention: {event_type}_{schema_version}.json
-// The last underscore separates event_type from schema_version.
-// Example: contract.created_1.0.json → key "contract.created/1.0"
+// loadSchemas compiles schema files named {event_type}_{schema_version}.json.
+// It uses the last underscore so event types may contain dots.
 func loadSchemas(fs embed.FS) (map[string]*jsonschema.Schema, error) {
 	entries, err := fs.ReadDir("schemas")
 	if err != nil {
@@ -98,8 +96,7 @@ func loadSchemas(fs embed.FS) (map[string]*jsonschema.Schema, error) {
 	return compiled, nil
 }
 
-// keyFromFilename converts a schema filename to its lookup key.
-// It splits on the last underscore so event types with dots are handled correctly.
+// keyFromFilename maps {event_type}_{schema_version}.json to event_type/schema_version.
 func keyFromFilename(filename string) (string, error) {
 	name := strings.TrimSuffix(filename, ".json")
 	idx := strings.LastIndex(name, "_")

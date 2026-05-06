@@ -30,7 +30,6 @@ func main() {
 	dlqCfg := config.LoadDLQ()
 	obsCfg := config.LoadObservability()
 
-	// --- metrics registry ---
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
 		collectors.NewGoCollector(),
@@ -38,7 +37,6 @@ func main() {
 	)
 	m := obsmetrics.New(reg)
 
-	// --- postgres ---
 	poolCfg, err := pgxpool.ParseConfig(pgCfg.DSN)
 	if err != nil {
 		slog.Error("parse postgres dsn failed", "error_reason", err.Error())
@@ -52,7 +50,6 @@ func main() {
 	}
 	defer pool.Close()
 
-	// --- HTTP server: metrics + health ---
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
@@ -71,23 +68,19 @@ func main() {
 		}
 	}()
 
-	// --- schema validator ---
 	validator, err := validation.NewSchemaValidator()
 	if err != nil {
 		slog.Error("init schema validator failed", "error_reason", err.Error())
 		panic(err)
 	}
 
-	// --- dlq ---
 	dlqProducer := kafka.NewProducer(dlqCfg.Brokers, dlqCfg.Topic)
 	defer dlqProducer.Close()
 	dlqPublisher := dlq.NewPublisher(dlqProducer, kafkaCfg.Topic)
 
-	// --- handler ---
 	repo := pg.NewEventRepository(pool)
 	handler := processor.NewHandler(repo, validator, dlqPublisher, processor.WithMetrics(m))
 
-	// --- consumer ---
 	consumer := kafka.NewConsumer(kafkaCfg.Brokers, kafkaCfg.Topic, kafkaCfg.GroupID,
 		kafka.WithWorkers(kafkaCfg.Workers))
 	defer consumer.Close()

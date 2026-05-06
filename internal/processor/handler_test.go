@@ -11,8 +11,6 @@ import (
 	"github.com/DanMke/event-processing-platform/internal/processor"
 )
 
-// --- mocks ---
-
 type mockRepo struct {
 	err   error
 	saved []domain.Event
@@ -47,8 +45,6 @@ func (m *mockDLQ) Publish(_ context.Context, _ []byte, reason string) error {
 	return nil
 }
 
-// --- helpers ---
-
 func validEventBytes(t *testing.T) []byte {
 	t.Helper()
 	payload, _ := json.Marshal(map[string]any{
@@ -72,8 +68,6 @@ func validEventBytes(t *testing.T) []byte {
 	}
 	return data
 }
-
-// --- tests ---
 
 func TestHandle_InvalidJSON(t *testing.T) {
 	dlq := &mockDLQ{}
@@ -148,7 +142,7 @@ func TestHandle_SaveError_ReturnsErrorWithoutDLQ(t *testing.T) {
 	repo := &mockRepo{err: errors.New("connection refused")}
 	h := processor.NewHandler(repo, &mockValidator{}, dlq)
 
-	// short timeout to cut through retry delays quickly
+	// Use a short timeout to avoid waiting through retry delays.
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 

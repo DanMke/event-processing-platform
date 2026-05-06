@@ -28,7 +28,7 @@ type DLQPublisher interface {
 
 type Option func(*Handler)
 
-// WithMetrics attaches Prometheus instrumentation; optional.
+// WithMetrics records processing metrics when provided.
 func WithMetrics(m *metrics.Metrics) Option {
 	return func(h *Handler) { h.metrics = m }
 }
@@ -51,7 +51,6 @@ func NewHandler(repo Repository, validator Validator, dlq DLQPublisher, opts ...
 func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 	start := time.Now()
 
-	// --- unmarshal ---
 	var event domain.Event
 	if err := json.Unmarshal(value, &event); err != nil {
 		slog.Error("unmarshal failed",
@@ -78,7 +77,6 @@ func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 
 	logger.Info("event received")
 
-	// --- envelope validation ---
 	if err := validation.ValidateEnvelope(event); err != nil {
 		logger.Warn("invalid envelope",
 			"status", "rejected",
@@ -93,7 +91,6 @@ func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 		return nil
 	}
 
-	// --- payload validation ---
 	if err := h.validator.ValidatePayload(event); err != nil {
 		logger.Warn("invalid payload",
 			"status", "rejected",
@@ -108,7 +105,6 @@ func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 		return nil
 	}
 
-	// --- persist with retry ---
 	var isDuplicate bool
 	saveErr := retry.Do(ctx, func() error {
 		err := h.repo.Save(ctx, event)

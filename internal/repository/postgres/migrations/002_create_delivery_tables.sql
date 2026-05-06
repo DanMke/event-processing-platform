@@ -1,8 +1,8 @@
--- Delivery targets: connection config per tenant
+-- Delivery targets configured per tenant.
 CREATE TABLE IF NOT EXISTS delivery_targets (
     id         TEXT        PRIMARY KEY,
     tenant_id  TEXT        NOT NULL,
-    kind       TEXT        NOT NULL,      -- webhook | kafka | sqs
+    kind       TEXT        NOT NULL,
     config     JSONB       NOT NULL,
     active     BOOLEAN     NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -12,14 +12,14 @@ CREATE INDEX IF NOT EXISTS idx_delivery_targets_tenant
     ON delivery_targets (tenant_id)
     WHERE active = true;
 
--- Outbox: one row per event/target, consumed by sender
+-- One outbox row is created per event and target.
 CREATE TABLE IF NOT EXISTS outbox (
     id           BIGSERIAL   PRIMARY KEY,
     event_id     TEXT        NOT NULL,
     tenant_id    TEXT        NOT NULL,
     target_id    TEXT        NOT NULL REFERENCES delivery_targets(id),
     payload      JSONB       NOT NULL,
-    status       TEXT        NOT NULL DEFAULT 'pending',  -- pending | sent | failed
+    status       TEXT        NOT NULL DEFAULT 'pending',
     attempts     INT         NOT NULL DEFAULT 0,
     scheduled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     sent_at      TIMESTAMPTZ,
@@ -27,17 +27,17 @@ CREATE TABLE IF NOT EXISTS outbox (
     CONSTRAINT uq_outbox_event_target UNIQUE (event_id, tenant_id, target_id)
 );
 
--- Sender polls pending records ordered by scheduled_at, per target
+-- Sender reads pending rows by target in schedule order.
 CREATE INDEX IF NOT EXISTS idx_outbox_sender
     ON outbox (target_id, scheduled_at)
     WHERE status = 'pending';
 
--- Retry: failed records whose backoff window has passed
+-- Retry lookup for failed rows whose backoff expired.
 CREATE INDEX IF NOT EXISTS idx_outbox_retry
     ON outbox (scheduled_at)
     WHERE status = 'failed';
 
--- Demo targets: tenant-01 has two targets to exercise the 1:N outbox behaviour
+-- Demo seed: tenant-01 has webhook and Kafka targets.
 INSERT INTO delivery_targets (id, tenant_id, kind, config) VALUES
     ('webhook-tenant-00', 'tenant-00', 'webhook',
      '{"url":"http://localhost:9000/events","timeout_seconds":10}'),

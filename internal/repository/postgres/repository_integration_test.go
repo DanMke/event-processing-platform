@@ -31,8 +31,7 @@ func setupDB(t *testing.T) *pgxpool.Pool {
 			"migrations/001_create_events_table.sql",
 			"migrations/002_create_delivery_tables.sql",
 		),
-		// Postgres restarts after running init scripts; wait for the second
-		// "ready" log to ensure the schema is applied before connecting.
+		// Init scripts finish before the second "ready" log.
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
 				WithOccurrence(2).
@@ -92,7 +91,6 @@ func TestEventRepository_Save(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("tenant with two targets enqueues two outbox rows", func(t *testing.T) {
-		// tenant-01 has webhook + kafka targets in 002 seed (exercises 1:N outbox)
 		evt := newEvent("evt-001", "tenant-01")
 		if err := repo.Save(ctx, evt); err != nil {
 			t.Fatalf("expected nil, got: %v", err)
@@ -103,7 +101,6 @@ func TestEventRepository_Save(t *testing.T) {
 	})
 
 	t.Run("tenant with one target enqueues one outbox row", func(t *testing.T) {
-		// tenant-03 has kafka target only
 		evt := newEvent("evt-002", "tenant-03")
 		if err := repo.Save(ctx, evt); err != nil {
 			t.Fatalf("expected nil, got: %v", err)
@@ -127,7 +124,6 @@ func TestEventRepository_Save(t *testing.T) {
 	})
 
 	t.Run("tenant with no registered target saves without outbox entry", func(t *testing.T) {
-		// tenant-99 has no delivery_target in the seed
 		evt := newEvent("evt-no-target", "tenant-99")
 		if err := repo.Save(ctx, evt); err != nil {
 			t.Fatalf("expected nil, got: %v", err)
@@ -138,7 +134,6 @@ func TestEventRepository_Save(t *testing.T) {
 	})
 
 	t.Run("same event_id different tenants are independent", func(t *testing.T) {
-		// PK is (tenant_id, event_id)
 		if err := repo.Save(ctx, newEvent("evt-shared", "tenant-01")); err != nil {
 			t.Fatalf("tenant-01: %v", err)
 		}

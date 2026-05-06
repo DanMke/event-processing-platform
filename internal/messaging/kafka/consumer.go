@@ -18,7 +18,7 @@ type reader interface {
 
 type ConsumerOption func(*Consumer)
 
-// WithWorkers sets the number of concurrent message workers (default 1).
+// WithWorkers sets the worker count when n is greater than 1.
 func WithWorkers(n int) ConsumerOption {
 	return func(c *Consumer) {
 		if n > 1 {
@@ -54,9 +54,8 @@ func NewConsumer(brokers []string, topic, groupID string, opts ...ConsumerOption
 	return c
 }
 
-// Run consumes messages from Kafka using a chan-of-chans pattern: a fetcher
-// goroutine dispatches workers in parallel; a committer drains results in fetch
-// order, guaranteeing ascending offset commits and at-least-once delivery.
+// Run processes messages concurrently and commits offsets in fetch order.
+// Failed messages are not committed, allowing Kafka to redeliver them.
 func (c *Consumer) Run(ctx context.Context, handler MessageHandler) error {
 	slog.Info("consumer loop started", "topic", c.topic, "group", c.group, "workers", c.workers)
 	defer slog.Info("consumer loop stopped", "topic", c.topic, "group", c.group)
@@ -71,13 +70,13 @@ func (c *Consumer) Run(ctx context.Context, handler MessageHandler) error {
 		err error
 	}
 
-	pending := make(chan chan msgResult, workers) // ordered in-flight slots
+	pending := make(chan chan msgResult, workers) // keeps fetch order
 	fetchErrCh := make(chan error, 1)
 
 	innerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Fetcher: fetches messages and dispatches worker goroutines.
+	// Dispatch fetched messages to workers.
 	go func() {
 		defer close(pending)
 		for {
@@ -102,9 +101,9 @@ func (c *Consumer) Run(ctx context.Context, handler MessageHandler) error {
 		}
 	}()
 
-	// Committer: processes results in fetch order.
+	// Commit results in fetch order.
 	for ch := range pending {
-		r := <-ch // wait for this specific message to finish
+		r := <-ch // wait before committing later offsets
 		if r.err != nil {
 			slog.Warn("handler error — stopping consumer for safe reprocessing",
 				"topic", r.msg.Topic,
@@ -114,7 +113,7 @@ func (c *Consumer) Run(ctx context.Context, handler MessageHandler) error {
 			)
 			cancel()
 			for drain := range pending {
-				<-drain // drain in-flight workers before returning
+				<-drain // let in-flight handlers finish
 			}
 			return r.err
 		}

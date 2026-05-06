@@ -51,7 +51,7 @@ func TestDo_ExhaustsAllRetries(t *testing.T) {
 	if err == nil {
 		t.Error("expected error after exhausting retries, got nil")
 	}
-	// 1 initial + 3 retries = 4 total attempts
+	// Initial call plus three retries.
 	if calls != 4 {
 		t.Errorf("expected 4 calls, got %d", calls)
 	}

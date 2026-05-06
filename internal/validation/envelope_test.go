@@ -126,7 +126,7 @@ func TestValidateEnvelope(t *testing.T) {
 }
 
 func TestValidateEnvelope_MultipleFieldsMissingAllReported(t *testing.T) {
-	event := domain.Event{EventID: "evt-001"} // all other fields missing
+	event := domain.Event{EventID: "evt-001"}
 
 	err := validation.ValidateEnvelope(event)
 	if err == nil {

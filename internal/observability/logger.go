@@ -5,9 +5,8 @@ import (
 	"os"
 )
 
-// Init configures slog as the process-wide default logger.
-// Text format is used by default (readable in local console).
-// Set LOG_FORMAT=json to switch to JSON (recommended in production).
+// Init configures the process-wide slog logger.
+// LOG_FORMAT=json enables JSON logs.
 func Init() {
 	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
 

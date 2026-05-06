@@ -19,8 +19,6 @@ POSTGRES_MAX_CONNS ?= 20
         scale-processor health metrics \
         demo demo-scale
 
-# ── infra ──────────────────────────────────────────────────────────────────────
-
 up:
 	$(DOCKER) up -d --build
 
@@ -32,8 +30,6 @@ logs:
 
 ps:
 	$(DOCKER) ps
-
-# ── setup ──────────────────────────────────────────────────────────────────────
 
 create-topic:
 	docker exec kafka sh -c "until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list >/dev/null 2>&1; do sleep 2; done"
@@ -58,8 +54,6 @@ migrate:
 	docker exec -i postgres psql -U events -d events \
 		< internal/repository/postgres/migrations/002_create_delivery_tables.sql
 
-# ── build ──────────────────────────────────────────────────────────────────────
-
 tidy:
 	$(GO) mod tidy
 
@@ -74,15 +68,11 @@ build: tidy
 docker-build: tidy
 	$(DOCKER) build processor loadgen
 
-# ── test ───────────────────────────────────────────────────────────────────────
-
 test:
 	$(GO) test ./...
 
 test-integration:
 	$(GO) test -tags=integration -v ./internal/repository/postgres/...
-
-# ── run local ──────────────────────────────────────────────────────────────────
 
 processor:
 	$(GO) run ./cmd/processor
@@ -96,8 +86,6 @@ load-test:
 	CONCURRENCY=$(CONCURRENCY) \
 	$(GO) run ./cmd/loadgen
 
-# ── run docker ─────────────────────────────────────────────────────────────────
-
 load-test-docker:
 	$(DOCKER_LOAD) run --rm --build \
 		-e TOTAL_EVENTS=$(TOTAL_EVENTS) \
@@ -109,18 +97,14 @@ load-test-docker:
 
 scale-processor:
 	$(DOCKER) up -d --build --scale processor=$(SCALE)
-	@echo "$(SCALE) instâncias do processor (workers=$(KAFKA_WORKERS), pg_max_conns=$(POSTGRES_MAX_CONNS))"
-	@echo "Kafka UI → http://localhost:8080 → Consumer Groups → event-processor"
-
-# ── observability ──────────────────────────────────────────────────────────────
+	@echo "$(SCALE) processor instances running (workers=$(KAFKA_WORKERS), pg_max_conns=$(POSTGRES_MAX_CONNS))"
+	@echo "Kafka UI -> http://localhost:8080 -> Consumer Groups -> event-processor"
 
 health:
 	$(DOCKER) exec -T processor wget -qO- http://localhost:2112/healthz
 
 metrics:
 	$(DOCKER) exec -T processor wget -qO- http://localhost:2112/metrics
-
-# ── demo ───────────────────────────────────────────────────────────────────────
 
 demo: docker-build
 	$(DOCKER) up -d kafka postgres kafka-ui

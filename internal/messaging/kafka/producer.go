@@ -26,8 +26,7 @@ func NewProducer(brokers []string, topic string) *Producer {
 	}
 }
 
-// Publish marshals v to JSON and sends it without a partition key.
-// Used by DLQ, which does not require tenant-based routing.
+// Publish sends v as JSON without a partition key.
 func (p *Producer) Publish(ctx context.Context, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -36,8 +35,7 @@ func (p *Producer) Publish(ctx context.Context, v any) error {
 	return p.publishRaw(ctx, nil, data)
 }
 
-// PublishKeyed marshals v to JSON and sends it with the given partition key.
-// Used by the producer service to route events by tenant_id.
+// PublishKeyed sends v as JSON using key for partitioning.
 func (p *Producer) PublishKeyed(ctx context.Context, key []byte, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -46,8 +44,7 @@ func (p *Producer) PublishKeyed(ctx context.Context, key []byte, v any) error {
 	return p.publishRaw(ctx, key, data)
 }
 
-// PublishRaw sends pre-built bytes with a partition key, skipping JSON marshalling.
-// Used by the load generator to send arbitrary payloads including invalid ones.
+// PublishRaw sends pre-encoded bytes with the provided key.
 func (p *Producer) PublishRaw(ctx context.Context, key, value []byte) error {
 	return p.publishRaw(ctx, key, value)
 }
