@@ -13,10 +13,10 @@ type Sender interface {
 }
 
 type FailedEvent struct {
-	OriginalEvent json.RawMessage `json:"original_event"`
-	ErrorReason   string          `json:"error_reason"`
-	FailedAt      time.Time       `json:"failed_at"`
-	SourceTopic   string          `json:"source_topic"`
+	OriginalEvent any       `json:"original_event"`
+	ErrorReason   string    `json:"error_reason"`
+	FailedAt      time.Time `json:"failed_at"`
+	SourceTopic   string    `json:"source_topic"`
 }
 
 type Publisher struct {
@@ -30,7 +30,7 @@ func NewPublisher(sender Sender, sourceTopic string) *Publisher {
 
 func (p *Publisher) Publish(ctx context.Context, original []byte, reason string) error {
 	failed := FailedEvent{
-		OriginalEvent: json.RawMessage(original),
+		OriginalEvent: originalEvent(original),
 		ErrorReason:   reason,
 		FailedAt:      time.Now().UTC(),
 		SourceTopic:   p.sourceTopic,
@@ -43,4 +43,11 @@ func (p *Publisher) Publish(ctx context.Context, original []byte, reason string)
 		"error_reason", reason,
 	)
 	return nil
+}
+
+func originalEvent(original []byte) any {
+	if json.Valid(original) {
+		return json.RawMessage(original)
+	}
+	return string(original)
 }
