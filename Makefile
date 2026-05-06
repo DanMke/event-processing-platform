@@ -64,6 +64,7 @@ build: tidy
 	$(GO) build -o bin/processor ./cmd/processor
 	$(GO) build -o bin/producer  ./cmd/producer
 	$(GO) build -o bin/loadgen   ./cmd/loadgen
+	$(GO) build -o bin/sender    ./cmd/sender
 
 docker-build: tidy
 	$(DOCKER) build processor loadgen
@@ -72,13 +73,16 @@ test:
 	$(GO) test ./...
 
 test-integration:
-	$(GO) test -tags=integration -v ./internal/repository/postgres/...
+	$(GO) test -tags=integration -v ./internal/repository/postgres/... ./internal/sender/...
 
 processor:
 	$(GO) run ./cmd/processor
 
 producer:
 	$(GO) run ./cmd/producer
+
+sender:
+	$(GO) run ./cmd/sender
 
 load-test:
 	TOTAL_EVENTS=$(TOTAL_EVENTS) TENANTS=$(TENANTS) \

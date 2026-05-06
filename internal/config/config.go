@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Processor struct {
@@ -30,6 +31,11 @@ type DLQ struct {
 
 type ObservabilityConfig struct {
 	MetricsPort string
+}
+
+type Sender struct {
+	PollInterval time.Duration
+	BatchSize    int
 }
 
 func LoadProcessor() Processor {
@@ -65,6 +71,13 @@ func LoadDLQ() DLQ {
 func LoadObservability() ObservabilityConfig {
 	return ObservabilityConfig{
 		MetricsPort: getEnv("METRICS_PORT", "2112"),
+	}
+}
+
+func LoadSender() Sender {
+	return Sender{
+		PollInterval: time.Duration(getEnvInt("SENDER_POLL_INTERVAL_MS", 1000)) * time.Millisecond,
+		BatchSize:    getEnvInt("SENDER_BATCH_SIZE", 50),
 	}
 }
 
