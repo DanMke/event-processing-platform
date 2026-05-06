@@ -12,16 +12,17 @@ The project focuses on the core event-processing path: consume events from a str
 - JSON Schema validation for event payloads
 - PostgreSQL persistence for accepted events
 - Transactional outbox rows for future delivery
+- Sender skeleton that consumes the outbox under `FOR UPDATE SKIP LOCKED` and routes jobs to a Dispatcher
 - Dead-letter topic for invalid or malformed messages
 - Idempotency based on `(tenant_id, event_id)`
 - Structured logs with `slog`
 - Health and Prometheus metrics endpoints
 - Docker Compose local environment
-- Unit tests, repository integration tests, and GitHub Actions CI
+- Unit tests, repository and sender integration tests, and GitHub Actions CI
 
 ## What Is Not Implemented Yet
 
-- The sender service that consumes the outbox and delivers events to final clients
+- Concrete delivery adapters in the sender (webhook / kafka / sqs); the current dispatcher only logs
 - AWS infrastructure provisioning
 - Production-grade dashboards and alerts
 - A dedicated migration tool such as `golang-migrate`
@@ -72,7 +73,7 @@ Examples of supported target types in the model:
 - `kafka`
 - `sqs`
 
-The current processor reads this table and creates outbox rows. It does not deliver to these targets directly.
+The current processor reads this table and creates outbox rows. The sender skeleton then claims those rows and routes them through a Dispatcher; concrete adapters per kind are still a follow-up.
 
 ### `outbox`
 
@@ -108,6 +109,36 @@ This project keeps that responsibility in the processing side:
 
 In this model, `target_id` is not the same thing as a Kafka routing key. It is an internal identifier for a configured delivery target, such as `webhook-tenant-01` or `kafka-tenant-03`.
 
+## Sender (skeleton)
+
+The sender is a separate binary (`cmd/sender`) that consumes the `outbox` table and hands each row to a `Dispatcher`. The current implementation is a skeleton focused on the data-plane contract; concrete adapters per `kind` (webhook / kafka / sqs) are a follow-up.
+
+What the skeleton already does:
+
+- Polls the outbox on a configurable interval.
+- Claims a batch of pending rows with `SELECT ... FOR UPDATE OF outbox SKIP LOCKED`, which makes it safe to run multiple sender replicas without lock contention.
+- Joins `delivery_targets` to read the kind and config.
+- Routes each row to the `Dispatcher`.
+- Marks the row as `sent` on success or `failed` on dispatch error, incrementing `attempts` either way.
+- Exposes `/healthz` for Docker health checks.
+
+The default `Dispatcher` is `LogDispatcher` -> it logs `"would deliver"` with the kind, target id, tenant, and event id. Replacing it with a real adapter is a localized change in `cmd/sender/main.go`.
+
+Run locally:
+
+```bash
+make sender
+```
+
+Tunables:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SENDER_POLL_INTERVAL_MS` | `1000` | Wait between batches |
+| `SENDER_BATCH_SIZE` | `50` | Maximum rows per tick |
+
+Integration tests under `internal/sender` exercise the SQL against a real PostgreSQL container, including the dispatcher-failure path and batch-size enforcement.
+
 ## Reliability Model
 
 ### At-least-once processing
@@ -120,6 +151,16 @@ The Kafka consumer uses explicit `FetchMessage` and `CommitMessages` calls.
 - If DLQ publishing fails, the offset is not committed.
 
 This gives at-least-once behavior. Duplicates are expected and handled at the database layer.
+
+### First-time consumer offset
+
+The reader is configured with `StartOffset: kafka.FirstOffset`. This setting only applies the first time a consumer group joins a partition with no committed offset. After that, the consumer always resumes from the last committed offset.
+
+The reason for this choice:
+
+- The default in `kafka-go` is `LastOffset`, which makes the consumer skip every message that exists before the group joins.
+- In single-shot scenarios like `make demo`, the load generator can publish messages while the consumer is still completing the group rebalance. With `LastOffset` those messages are silently lost; with `FirstOffset` they are processed.
+- For an event processor whose contract is "no event is lost", reading from the beginning on first join is the safer default. Subsequent restarts behave normally because the committed offset already exists.
 
 ### Idempotency
 
@@ -290,6 +331,22 @@ processor scale: up to 3 active consumers
 Scaling beyond the number of partitions will start more containers, but extra consumers will wait idle until Kafka rebalances or more partitions exist.
 
 Inside each processor instance, `KAFKA_WORKERS` controls concurrent message handling. The implementation commits offsets in fetch order so a later offset is not committed before an earlier one finishes.
+
+## Performance Notes
+
+The included `loadgen` is meant to exercise the processor behavior locally: valid events, invalid events, duplicates, DLQ handling, and outbox creation.
+
+It is not a full benchmark tool. For higher-throughput tests, the event generation side should be scaled as well, either by increasing `CONCURRENCY`, running multiple load generator instances, or using a dedicated Kafka benchmark tool.
+
+Processor throughput also depends on:
+
+- Kafka partition count
+- number of processor replicas
+- `KAFKA_WORKERS`
+- `POSTGRES_MAX_CONNS`
+- database write latency
+
+With the default local setup, `raw-events` has 3 partitions. Scaling the processor beyond 3 active consumers will not increase Kafka parallelism unless the topic has more partitions.
 
 ## Observability
 
@@ -486,7 +543,8 @@ The purpose of the CI is not only to run tests. It also proves that a fresh Linu
 |-- cmd/
 |   |-- loadgen/       local load generator
 |   |-- processor/     Kafka consumer and event processor
-|   `-- producer/      small sample producer
+|   |-- producer/      small sample producer
+|   `-- sender/        outbox poller skeleton
 |-- infra/
 |   |-- docker-compose.yml
 |   `-- prometheus.yml
@@ -500,6 +558,7 @@ The purpose of the CI is not only to run tests. It also proves that a fresh Linu
 |   |-- producer/      event publishing service
 |   |-- repository/    PostgreSQL repository and migrations
 |   |-- retry/         retry helper
+|   |-- sender/        outbox poller and dispatcher
 |   `-- validation/    envelope and JSON Schema validation
 |-- Dockerfile
 |-- Makefile
