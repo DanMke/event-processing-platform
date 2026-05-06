@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -18,8 +19,18 @@ func NewEventRepository(pool *pgxpool.Pool) *EventRepository {
 	return &EventRepository{pool: pool}
 }
 
+// Save persists the event and enqueues one outbox row per active delivery
+// target registered for the tenant — all in a single transaction.
+// If no target is registered the event is saved with no outbox entry.
 func (r *EventRepository) Save(ctx context.Context, event domain.Event) error {
-	result, err := r.pool.Exec(ctx, `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// --- persist event ---
+	result, err := tx.Exec(ctx, `
 		INSERT INTO events
 			(event_id, tenant_id, event_type, schema_version, producer, trace_id, payload, occurred_at, processed_at)
 		VALUES
@@ -42,5 +53,46 @@ func (r *EventRepository) Save(ctx context.Context, event domain.Event) error {
 	if result.RowsAffected() == 0 {
 		return domain.ErrDuplicateEvent
 	}
-	return nil
+
+	// --- triage: enqueue outbox for each active target ---
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("marshal outbox payload: %w", err)
+	}
+
+	// Collect all target IDs before closing the cursor — pgx does not allow
+	// a second statement on the same connection while rows is still open.
+	rows, err := tx.Query(ctx,
+		`SELECT id FROM delivery_targets WHERE tenant_id = $1 AND active = true`,
+		event.TenantID,
+	)
+	if err != nil {
+		return fmt.Errorf("query delivery targets: %w", err)
+	}
+	var targetIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan target: %w", err)
+		}
+		targetIDs = append(targetIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate targets: %w", err)
+	}
+
+	for _, targetID := range targetIDs {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO outbox (event_id, tenant_id, target_id, payload)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (event_id, tenant_id, target_id) DO NOTHING
+		`, event.EventID, event.TenantID, targetID, payload)
+		if err != nil {
+			return fmt.Errorf("insert outbox: %w", err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
