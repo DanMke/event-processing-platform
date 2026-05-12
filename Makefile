@@ -2,14 +2,14 @@ GO           := go
 DOCKER       := docker compose -f infra/docker-compose.yml
 DOCKER_LOAD  := docker compose -f infra/docker-compose.yml --profile loadgen
 
-TOTAL_EVENTS       ?= 1000
+TOTAL_EVENTS       ?= 5000
 TENANTS            ?= 5
 INVALID_RATIO      ?= 0.05
 DUPLICATE_RATIO    ?= 0.02
-CONCURRENCY        ?= 4
+CONCURRENCY        ?= 200
 SCALE              ?= 3
-KAFKA_WORKERS      ?= 4
-POSTGRES_MAX_CONNS ?= 20
+KAFKA_WORKERS      ?= 8
+POSTGRES_MAX_CONNS ?= 50
 
 .PHONY: up down logs ps \
         create-topic migrate \
@@ -17,6 +17,7 @@ POSTGRES_MAX_CONNS ?= 20
         test test-integration fmt tidy \
         processor producer load-test load-test-docker \
         scale-processor health metrics \
+        open-grafana open-prometheus open-kafka-ui \
         demo demo-scale
 
 up:
@@ -110,18 +111,42 @@ health:
 metrics:
 	$(DOCKER) exec -T processor wget -qO- http://localhost:2112/metrics
 
+open-grafana:
+	@echo "Grafana -> http://localhost:3000"
+	@start http://localhost:3000 2>/dev/null || open http://localhost:3000 2>/dev/null || true
+
+open-prometheus:
+	@echo "Prometheus -> http://localhost:9090"
+	@start http://localhost:9090 2>/dev/null || open http://localhost:9090 2>/dev/null || true
+
+open-kafka-ui:
+	@echo "Kafka UI -> http://localhost:8080"
+	@start http://localhost:8080 2>/dev/null || open http://localhost:8080 2>/dev/null || true
+
 demo: docker-build
 	$(DOCKER) up -d kafka postgres kafka-ui
 	$(MAKE) create-topic
 	$(MAKE) migrate
 	$(DOCKER) up -d --build processor
-	$(DOCKER) up -d prometheus
-	$(MAKE) load-test-docker TOTAL_EVENTS=500 TENANTS=5 INVALID_RATIO=0.05 DUPLICATE_RATIO=0.02 CONCURRENCY=4
+	$(DOCKER) up -d kafka-exporter prometheus grafana
+	@echo "Aguardando stack ficar pronto..."
+	@sleep 5
+	$(MAKE) load-test-docker TOTAL_EVENTS=10000 TENANTS=5 INVALID_RATIO=0.05 DUPLICATE_RATIO=0.02 CONCURRENCY=200
+	@echo ""
+	@echo "Grafana    -> http://localhost:3000"
+	@echo "Prometheus -> http://localhost:9090"
+	@echo "Kafka UI   -> http://localhost:8080"
 
 demo-scale: docker-build
 	$(DOCKER) up -d kafka postgres kafka-ui
 	$(MAKE) create-topic
 	$(MAKE) migrate
 	$(MAKE) scale-processor SCALE=3
-	$(DOCKER) up -d prometheus
+	$(DOCKER) up -d kafka-exporter prometheus grafana
+	@echo "Aguardando stack ficar pronto..."
+	@sleep 5
 	$(MAKE) load-test-docker TOTAL_EVENTS=5000 TENANTS=10 INVALID_RATIO=0.05 DUPLICATE_RATIO=0.02 CONCURRENCY=20
+	@echo ""
+	@echo "Grafana    -> http://localhost:3000"
+	@echo "Prometheus -> http://localhost:9090"
+	@echo "Kafka UI   -> http://localhost:8080"

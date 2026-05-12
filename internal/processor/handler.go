@@ -50,6 +50,11 @@ func NewHandler(repo Repository, validator Validator, dlq DLQPublisher, opts ...
 
 func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 	start := time.Now()
+	h.inc(func(m *metrics.Metrics) {
+		m.EventsReceivedTotal.Inc()
+		m.EventsInFlight.Inc()
+	})
+	defer h.inc(func(m *metrics.Metrics) { m.EventsInFlight.Dec() })
 
 	var event domain.Event
 	if err := json.Unmarshal(value, &event); err != nil {
@@ -57,12 +62,12 @@ func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 			"status", "dlq",
 			"error_reason", err.Error(),
 		)
-		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.Inc() })
-		h.observe(start)
+		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.WithLabelValues("unmarshal_error").Inc() })
+		h.observe(start, "unknown")
 		if dlqErr := h.sendToDLQ(ctx, value, fmt.Sprintf("unmarshal: %v", err)); dlqErr != nil {
 			return dlqErr
 		}
-		h.inc(func(m *metrics.Metrics) { m.EventsSentToDLQTotal.Inc() })
+		h.inc(func(m *metrics.Metrics) { m.EventsSentToDLQTotal.WithLabelValues("unmarshal_error").Inc() })
 		return nil
 	}
 
@@ -82,12 +87,12 @@ func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 			"status", "rejected",
 			"error_reason", err.Error(),
 		)
-		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.Inc() })
-		h.observe(start)
+		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.WithLabelValues("envelope_error").Inc() })
+		h.observe(start, event.EventType)
 		if dlqErr := h.sendToDLQ(ctx, value, err.Error()); dlqErr != nil {
 			return dlqErr
 		}
-		h.inc(func(m *metrics.Metrics) { m.EventsSentToDLQTotal.Inc() })
+		h.inc(func(m *metrics.Metrics) { m.EventsSentToDLQTotal.WithLabelValues("envelope_error").Inc() })
 		return nil
 	}
 
@@ -96,12 +101,12 @@ func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 			"status", "rejected",
 			"error_reason", err.Error(),
 		)
-		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.Inc() })
-		h.observe(start)
+		h.inc(func(m *metrics.Metrics) { m.EventsInvalidTotal.WithLabelValues("payload_error").Inc() })
+		h.observe(start, event.EventType)
 		if dlqErr := h.sendToDLQ(ctx, value, err.Error()); dlqErr != nil {
 			return dlqErr
 		}
-		h.inc(func(m *metrics.Metrics) { m.EventsSentToDLQTotal.Inc() })
+		h.inc(func(m *metrics.Metrics) { m.EventsSentToDLQTotal.WithLabelValues("payload_error").Inc() })
 		return nil
 	}
 
@@ -115,11 +120,13 @@ func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 		return err
 	})
 
-	h.observe(start)
+	h.observe(start, event.EventType)
 
 	if isDuplicate {
 		logger.Info("duplicate event ignored", "status", "skipped")
-		h.inc(func(m *metrics.Metrics) { m.EventsDuplicatedTotal.Inc() })
+		h.inc(func(m *metrics.Metrics) {
+			m.EventsDuplicatedTotal.WithLabelValues(event.TenantID, event.EventType).Inc()
+		})
 		return nil
 	}
 
@@ -128,12 +135,17 @@ func (h *Handler) Handle(ctx context.Context, _ []byte, value []byte) error {
 			"status", "failed",
 			"error_reason", saveErr.Error(),
 		)
-		h.inc(func(m *metrics.Metrics) { m.EventsFailedTotal.Inc() })
+		h.inc(func(m *metrics.Metrics) {
+			m.EventsFailedTotal.WithLabelValues(event.TenantID, event.EventType).Inc()
+		})
 		return fmt.Errorf("save event: %w", saveErr)
 	}
 
 	logger.Info("event persisted", "status", "success")
-	h.inc(func(m *metrics.Metrics) { m.EventsProcessedTotal.Inc() })
+	h.inc(func(m *metrics.Metrics) {
+		m.EventsProcessedTotal.WithLabelValues(event.TenantID, event.EventType, event.Producer).Inc()
+	})
+	h.observeAge(event)
 	return nil
 }
 
@@ -151,8 +163,19 @@ func (h *Handler) inc(fn func(*metrics.Metrics)) {
 	}
 }
 
-func (h *Handler) observe(start time.Time) {
+// observe records the processing duration labeled by event_type.
+// Use "unknown" when the event type is not available (e.g. unmarshal failure).
+func (h *Handler) observe(start time.Time, eventType string) {
 	if h.metrics != nil {
-		h.metrics.ProcessingDuration.Observe(time.Since(start).Seconds())
+		h.metrics.ProcessingDuration.WithLabelValues(eventType).Observe(time.Since(start).Seconds())
+	}
+}
+
+// observeAge records the delay between event.OccurredAt and now.
+// Called only for successfully processed events.
+func (h *Handler) observeAge(event domain.Event) {
+	if h.metrics != nil {
+		age := time.Since(event.OccurredAt).Seconds()
+		h.metrics.MessageAgeSeconds.WithLabelValues(event.EventType).Observe(age)
 	}
 }
