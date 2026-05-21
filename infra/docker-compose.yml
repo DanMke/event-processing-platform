@@ -68,9 +68,9 @@ services:
       KAFKA_TOPIC: raw-events
       KAFKA_GROUP_ID: event-processor
       KAFKA_DLQ_TOPIC: failed-events
-      KAFKA_WORKERS: ${KAFKA_WORKERS:-4}
+      KAFKA_WORKERS: ${KAFKA_WORKERS:-8}
       POSTGRES_DSN: postgres://events:events@postgres:5432/events?sslmode=disable
-      POSTGRES_MAX_CONNS: ${POSTGRES_MAX_CONNS:-20}
+      POSTGRES_MAX_CONNS: ${POSTGRES_MAX_CONNS:-50}
       METRICS_PORT: "2112"
       LOG_FORMAT: json
     expose:
@@ -109,6 +109,19 @@ services:
     profiles:
       - loadgen
 
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.7.0
+    container_name: kafka-exporter
+    command:
+      - "--kafka.server=kafka:29092"
+      - "--kafka.version=3.7.0"
+    expose:
+      - "9308"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v2.54.0
     container_name: prometheus
@@ -125,7 +138,25 @@ services:
       processor:
         condition: service_healthy
 
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/events.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
 volumes:
   kafka_data:
   postgres_data:
   prometheus_data:
+  grafana_data:
